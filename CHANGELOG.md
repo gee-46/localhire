@@ -6,3 +6,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-01T20:15:22+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Completed full-stack architecture audit, identified Supabase pool timeouts, PostGIS configurations, and defined production milestone roadmap.
+
+### [2026-11-01] feat(config): implement robust runtime environment validation schema
+- **Date:** 2026-11-01T21:42:10+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added strict startup environment validation in env.js to prevent silent misconfigurations and enforce secret hygiene across staging and production.
