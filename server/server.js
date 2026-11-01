@@ -6,56 +6,23 @@ const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 const prisma = require('./config/prisma');
-const { ensureAuthorizedChatParticipants } = require('./controllers/chatController');
+const { isSessionCurrent } = require('./services/authTokens');
+const chatService = require('./services/chatService');
 const { activeTracking, setSocketServer, stopBookingTracking, stopWorkerTracking } = require('./trackingState');
+const trackingService = require('./services/trackingService');
 
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 // ─── Startup environment guard ────────────────────────────────────────────────
-if (!process.env.JWT_SECRET) {
-  console.error('[FATAL] JWT_SECRET environment variable is not set.');
-  console.error('[FATAL] Set it in server/.env before starting the server.');
-  console.error('[FATAL] Generate a safe value: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
-  process.exit(1);
-}
-
-if (!process.env.DATABASE_URL) {
-  console.error('[FATAL] DATABASE_URL environment variable is not set.');
-  process.exit(1);
-}
-
-// ─── Payment & Escrow environment guard ───────────────────────────────────────
-const escrowMode = (process.env.ESCROW_PAYMENT_MODE || 'LIVE').toUpperCase();
-const isDev = process.env.NODE_ENV !== 'production';
-
-if (escrowMode === 'SIMULATED') {
-  if (!isDev) {
-    console.error('[FATAL] ESCROW_PAYMENT_MODE cannot be SIMULATED in production.');
-    process.exit(1);
-  }
-  console.log('[Server] Escrow running in SIMULATED sandbox mode. Simulated payments enabled.');
-} else {
+// Production refuses to start with missing, placeholder or development-default secrets (see config/env.js).
+// Outside production the same findings are warnings, except JWT_SECRET and DATABASE_URL which are always required.
+const { enforce, isProduction, parseTrustProxy } = require('./config/env');
+enforce(process.env);
+{
   const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  const isKeyConfigured = Boolean(
-    keyId &&
-    keySecret &&
-    !keyId.includes('replace_with') &&
-    !keyId.includes('your_') &&
-    !keySecret.includes('replace_with') &&
-    !keySecret.includes('your_')
-  );
-
-  if (!isKeyConfigured) {
-    console.warn('[Payment Gateway] Warning: LIVE payment mode is active but valid Razorpay credentials (RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET) are missing or set to placeholder values.');
-    console.warn('[Payment Gateway] Online gateway payments will be marked UNAVAILABLE until valid keys are configured in server/.env.');
-    if (!isDev) {
-      console.error('[FATAL] Valid RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are mandatory in production.');
-      process.exit(1);
-    }
-  } else {
-    console.log('[Server] Razorpay gateway credentials verified.');
-  }
+  if (keyId && !/replace_with|your_/.test(keyId)) console.log(`[Server] Razorpay gateway credentials present (${keyId.startsWith('rzp_live_') ? 'LIVE' : 'TEST'} mode).`);
+  if ((process.env.PAYOUT_MODE || 'LEDGER_ONLY').toUpperCase() === 'ROUTE') console.log('[Server] PAYOUT_MODE=ROUTE: worker payouts use Razorpay Route.');
+  else console.log('[Server] PAYOUT_MODE=LEDGER_ONLY: worker earnings are recorded as owed; no payout transfers are attempted.');
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -68,13 +35,18 @@ const chatRoutes = require('./routes/chatRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const escrowRoutes = require('./routes/escrowRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const pushRoutes = require('./routes/pushRoutes');
+const workerRoutes = require('./routes/workerRoutes');
+const categoryRoutes = require('./routes/categoryRoutes');
+const marketplaceRoutes = require('./routes/marketplaceRoutes');
 
 const app = express();
 const server = http.createServer(app);
 
-const bookingTrackingRoom = (bookingId) => `booking:${bookingId}`;
+const bookingTrackingRoom = trackingService.roomFor;
 
 const mapRole = (role) => {
   switch (role) {
@@ -87,89 +59,43 @@ const mapRole = (role) => {
   }
 };
 
-const isValidCoordinate = (value, min, max) => Number.isFinite(Number(value)) && Number(value) >= min && Number(value) <= max;
+// ── Proxy, transport and header hardening ─────────────────────────────────────
+app.disable('x-powered-by');
+const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+if (trustProxy !== false) app.set('trust proxy', trustProxy);
 
-const isWorkerLocationSharingEnabled = async (workerId) => {
-  const profile = await prisma.workerProfile.findUnique({
-    where: { userId: String(workerId) },
-    select: { locationSharing: { select: { sharingEnabled: true } } }
-  });
-  return Boolean(profile?.locationSharing?.sharingEnabled);
-};
-
-const persistWorkerLocation = async ({ bookingId, workerId, latitude, longitude }) => {
-  if (!bookingId || !workerId || !isValidCoordinate(latitude, -90, 90) || !isValidCoordinate(longitude, -180, 180)) {
-    return false;
+// HTTPS only in production: redirect plain HTTP (needs TRUST_PROXY so the original scheme is known), and tell browsers
+// to keep using HTTPS. The health check is exempt so platform probes over plain HTTP keep working.
+app.use((req, res, next) => {
+  if (isProduction()) {
+    if (!req.secure && trustProxy !== false && process.env.FORCE_HTTPS !== 'false' && req.path !== '/api/health') {
+      let host = req.headers.host;
+      try { if (process.env.SERVER_PUBLIC_URL) host = new URL(process.env.SERVER_PUBLIC_URL).host; } catch (e) { /* fall back to the request host */ }
+      return res.redirect(308, `https://${host}${req.originalUrl}`);
+    }
+    if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+  if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
-  try {
-    const workerProfile = await prisma.workerProfile.findUnique({
-      where: { userId: String(workerId) }
-    });
-
-    if (!workerProfile) {
-      return false;
+// In production an internal error message, SQL fragment or stack trace never reaches the client: the server log has it.
+app.use((req, res, next) => {
+  if (!isProduction()) return next();
+  const json = res.json.bind(res);
+  res.json = (body) => {
+    if (res.statusCode >= 500 && body && typeof body === 'object' && !Array.isArray(body)) {
+      const { error, stack, ...rest } = body;
+      body = rest;
     }
-
-    const result = await prisma.workerLocation.updateMany({
-      where: { workerProfileId: workerProfile.id, sharingEnabled: true },
-      data: {
-        latitude: Number(latitude),
-        longitude: Number(longitude),
-        lastLocationUpdate: new Date()
-      }
-    });
-
-    return result.count > 0;
-  } catch (error) {
-    console.error('[Socket Tracking] Worker location persistence failed:', error.message);
-    return false;
-  }
-};
-
-const verifyBookingTrackingAccess = async ({ bookingId, userId, role }) => {
-  if (!bookingId || !userId) {
-    return { authorized: false, reason: 'Missing bookingId or userId', booking: null };
-  }
-
-  try {
-    const booking = await prisma.booking.findUnique({
-      where: { id: String(bookingId) },
-      select: {
-        id: true,
-        status: true,
-        customerId: true,
-        workerId: true
-      }
-    });
-
-    if (!booking) {
-      return { authorized: false, reason: 'Booking not found', booking: null };
-    }
-
-    if (!['CONFIRMED', 'DISPATCHED', 'IN_PROGRESS'].includes(booking.status)) {
-      stopBookingTracking(bookingId, 'Booking is no longer active.');
-      return { authorized: false, reason: 'Location is available only for accepted active bookings', booking };
-    }
-
-    if (role === 'Worker' && booking.workerId !== userId) {
-      return { authorized: false, reason: 'Only the assigned worker may manage this booking tracking', booking };
-    }
-
-    if (role === 'Customer' && booking.customerId !== userId) {
-      return { authorized: false, reason: 'Only the booking owner may subscribe to this booking location', booking };
-    }
-
-    if (role !== 'Worker' && role !== 'Customer') {
-      return { authorized: false, reason: 'Role not authorized for tracking', booking };
-    }
-
-    return { authorized: true, reason: 'Authorized', booking };
-  } catch (error) {
-    console.error('[Socket Tracking] Access verification failed:', error);
-    return { authorized: false, reason: 'Server error validating booking access', booking: null };
-  }
-};
+    return json(body);
+  };
+  next();
+});
 
 // Middleware
 app.use(express.json({
@@ -183,21 +109,22 @@ const parseAllowedOrigins = () => {
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
-  return new Set([
+  // Local development origins are never trusted in production.
+  const dev = isProduction() ? [] : [
     'http://localhost:5500',
     'http://127.0.0.1:5500',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    ...envOrigins
-  ]);
+    'http://127.0.0.1:5173'
+  ];
+  return new Set([...dev, ...envOrigins]);
 };
 
 const corsOptions = {
   origin: (origin, callback) => {
     // Allow non-browser requests (e.g. mobile apps, curl, or file:// where origin is 'null')
-    if (!origin || origin === 'null') {
+    if (!origin || (origin === 'null' && !isProduction())) {
       return callback(null, true);
     }
     const allowed = parseAllowedOrigins();
@@ -221,6 +148,7 @@ const io = new Server(server, {
   cors: corsOptions
 });
 setSocketServer(io);
+trackingService.startSweeper();
 
 io.use(async (socket, next) => {
   const headerToken = socket.handshake.headers.authorization;
@@ -236,17 +164,22 @@ io.use(async (socket, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await prisma.user.findUnique({
       where: { id: String(decoded.id) },
-      select: { id: true, role: true }
+      select: { id: true, role: true, tokenVersion: true, isActive: true, isEmailVerified: true }
     });
 
     if (!user) {
       return next(new Error('Socket auth failed: user not found'));
     }
 
+    if (!isSessionCurrent(decoded, user) || user.isActive === false || user.isEmailVerified === false) {
+      return next(new Error('Socket auth failed: session is no longer valid'));
+    }
+
     socket.user = {
       id: user.id,
       role: mapRole(user.role)
     };
+    socket.data.decoded = decoded;
     return next();
   } catch (error) {
     console.error('[Socket Auth] Token verification failed:', error.message);
@@ -262,301 +195,135 @@ io.on('connection', (socket) => {
     socket.join(`user:${socket.user.id}`);
   }
 
-  socket.on('join_room', async (roomId) => {
-    if (!roomId || typeof roomId !== 'string') {
-      socket.emit('chat:error', { message: 'Invalid chat room reference.' });
-      return;
-    }
-
-    const userIds = roomId.split('_').filter(Boolean);
-    if (userIds.length !== 2) {
-      socket.emit('chat:error', { message: 'Chat room is not linked to a valid conversation.' });
-      return;
-    }
-
-    const [participantA, participantB] = userIds;
-    const otherUserId = String(socket.user.id) === String(participantA) ? participantB : participantA;
-
-    const auth = await ensureAuthorizedChatParticipants(socket.user.id, otherUserId);
-    if (!auth.authorized) {
-      socket.emit('chat:error', { message: auth.message });
-      return;
-    }
-
-    socket.join(roomId);
-    socket.data.chatRoom = roomId;
-    console.log(`[Socket] Socket ${socket.id} joined authorized room: ${roomId}`);
-  });
-
-  socket.on('send_message', async (data) => {
+  // ── Booking chat ─────────────────────────────────────────────────────────────────────────
+  // A socket authenticated once at connect time must not keep receiving messages after its session was revoked
+  // (logout, password change, deactivation). Logout/credential changes disconnect sockets directly; this also
+  // re-checks the session on every chat event so even a missed disconnect cannot be used.
+  const sessionStillValid = async () => {
     try {
-      if (!data || !data.roomId || !data.content) {
-        socket.emit('chat:error', { message: 'Message content and room are required.' });
+      const u = await prisma.user.findUnique({ where: { id: String(socket.user.id) }, select: { tokenVersion: true, isActive: true, isEmailVerified: true } });
+      return Boolean(u) && isSessionCurrent(socket.data.decoded, u) && u.isActive !== false && u.isEmailVerified !== false;
+    } catch (e) { return false; }
+  };
+  const respond = (ack, payload, errorEvent = 'chat:error') => {
+    if (typeof ack === 'function') ack(payload);
+    else if (!payload.ok) socket.emit(errorEvent, { message: payload.error, code: payload.code });
+  };
+  const guard = (handler) => async (data, ack) => {
+    try {
+      if (!(await sessionStillValid())) {
+        respond(ack, { ok: false, error: 'Your session is no longer valid. Please sign in again.', code: 'SESSION_REVOKED' });
+        socket.disconnect(true);
         return;
       }
-
-      const senderId = String(socket.user.id);
-      const roomParticipants = String(data.roomId).split('_').filter(Boolean);
-      const otherUserId = roomParticipants.find((id) => String(id) !== senderId);
-
-      if (!otherUserId) {
-        socket.emit('chat:error', { message: 'Could not resolve the recipient for this chat room.' });
-        return;
-      }
-
-      const auth = await ensureAuthorizedChatParticipants(senderId, otherUserId);
-      if (!auth.authorized) {
-        socket.emit('chat:error', { message: auth.message });
-        return;
-      }
-
-      const content = String(data.content).trim();
-      if (!content) {
-        socket.emit('chat:error', { message: 'Message content cannot be empty.' });
-        return;
-      }
-
-      const [user1Id, user2Id] = [senderId, otherUserId].sort();
-      const conversation = await prisma.conversation.upsert({
-        where: { user1Id_user2Id: { user1Id, user2Id } },
-        update: { lastMessageAt: new Date() },
-        create: { user1Id, user2Id, lastMessageAt: new Date() }
-      });
-
-      const message = await prisma.chatMessage.create({
-        data: {
-          conversationId: conversation.id,
-          senderId,
-          receiverId: otherUserId,
-          content,
-          isRead: false
-        }
-      });
-
-      const payload = {
-        id: message.id,
-        roomId: data.roomId,
-        senderId,
-        receiverId: otherUserId,
-        content: message.content,
-        createdAt: message.createdAt,
-        isRead: message.isRead,
-        conversationId: message.conversationId
-      };
-
-      io.to(data.roomId).emit('receive_message', payload);
-      io.to(`user:${senderId}`).emit('conversation:updated', { conversationId: conversation.id, message: payload });
-      io.to(`user:${otherUserId}`).emit('conversation:updated', { conversationId: conversation.id, message: payload });
-    } catch (error) {
-      console.error('[Socket Chat] Message save failed:', error);
-      socket.emit('chat:error', { message: 'Failed to send message. Please try again.' });
+      await handler(data || {}, ack);
+    } catch (e) {
+      if (e instanceof chatService.ChatError) return respond(ack, { ok: false, error: e.message, code: e.code || 'CHAT_ERROR' });
+      console.error('[Socket Chat] handler failed:', e);
+      respond(ack, { ok: false, error: 'Something went wrong. Please try again.', code: 'SERVER_ERROR' });
     }
+  };
+
+  socket.on('chat:join', guard(async ({ bookingId }, ack) => {
+    const { canSend, readOnlyReason } = await chatService.loadBooking(bookingId, socket.user.id); // throws 403/404 for non-participants
+    socket.join(chatService.roomFor(bookingId));
+    respond(ack, { ok: true, bookingId, canSend, readOnlyReason });
+  }));
+
+  socket.on('chat:leave', (data) => {
+    if (data && typeof data.bookingId === 'string') socket.leave(chatService.roomFor(data.bookingId));
   });
 
-  const handleBookingJoin = async ({ bookingId } = {}) => {
-    const { authorized, reason, booking } = await verifyBookingTrackingAccess({
-      bookingId,
-      userId: socket.user?.id,
-      role: socket.user?.role
-    });
+  socket.on('chat:send', guard(async ({ bookingId, content, clientMessageId }, ack) => {
+    const out = await chatService.sendMessage({ bookingId, senderId: socket.user.id, content, clientMessageId });
+    respond(ack, { ok: true, duplicate: out.duplicate, message: out.message });
+  }));
 
-    if (!authorized) {
-      socket.emit('tracking:error', { bookingId, message: reason });
-      return;
+  socket.on('chat:read', guard(async ({ bookingId }, ack) => {
+    const r = await chatService.markRead({ bookingId, userId: socket.user.id });
+    respond(ack, { ok: true, marked: r.marked });
+  }));
+
+  // ── Journey tracking ─────────────────────────────────────────────────────────────────────
+  // Same session re-check as chat: a revoked session must not keep receiving a worker's location.
+  const trackRespond = (ack, payload, bookingId) => {
+    if (typeof ack === 'function') ack(payload);
+    else if (!payload.ok) socket.emit('tracking:error', { bookingId, message: payload.error, code: payload.code });
+  };
+  const trackGuard = (handler) => async (data, ack) => {
+    const bookingId = data && typeof data.bookingId === 'string' ? data.bookingId : undefined;
+    try {
+      if (!(await sessionStillValid())) {
+        trackRespond(ack, { ok: false, error: 'Your session is no longer valid. Please sign in again.', code: 'SESSION_REVOKED' }, bookingId);
+        socket.disconnect(true);
+        return;
+      }
+      await handler(data || {}, ack, bookingId);
+    } catch (e) {
+      if (e instanceof trackingService.TrackError) return trackRespond(ack, { ok: false, error: e.message, code: e.code }, bookingId);
+      console.error('[Socket Tracking] handler failed:', e);
+      trackRespond(ack, { ok: false, error: 'Tracking is unavailable right now. Please try again.', code: 'SERVER_ERROR' }, bookingId);
     }
+  };
 
-    const room = bookingTrackingRoom(bookingId);
+  const ACTIVE_FOR_ROOM = ['CONFIRMED', 'DISPATCHED', 'IN_PROGRESS', 'AWAITING_CUSTOMER_CONFIRMATION'];
+  const statePayload = (view, state, message) => ({
+    bookingId: view.bookingId, active: Boolean(view.sharing && state && state.workerConnected !== false), workerId: view.worker.id, customerId: state ? state.customerId : undefined,
+    startedAt: state ? state.startedAt : (view.journeyStartedAt || null), lastLocation: view.location, lastUpdated: view.lastUpdated, freshness: view.freshness,
+    journeyStatus: view.journeyStatus, distanceKm: view.distanceKm, eta: null, sharing: view.sharing, message
+  });
+
+  const handleBookingJoin = trackGuard(async ({ bookingId }, ack) => {
+    const { booking, role } = await trackingService.loadForAccess(bookingId, socket.user.id); // 400/403/404 for anyone else
+    if (!ACTIVE_FOR_ROOM.includes(booking.status)) throw new trackingService.TrackError(409, 'Tracking is available only for accepted, active bookings.', 'NOT_ACTIVE');
+    const room = trackingService.roomFor(bookingId);
     socket.join(room);
     socket.data.trackingRoom = room;
+    const view = trackingService.viewFor({ booking, role });
 
-    if (socket.user.role === 'Worker') {
-      if (!(await isWorkerLocationSharingEnabled(socket.user.id))) {
-        socket.emit('tracking:error', { bookingId, message: 'Enable location sharing before starting tracking.' });
-        return;
+    if (role === 'Worker') {
+      (socket.data.trackingBookings = socket.data.trackingBookings || new Set()).add(bookingId);
+      let state = activeTracking.get(bookingId);
+      if (view.sharing) {
+        if (!state) {
+          state = { bookingId, workerId: booking.workerId, customerId: booking.customerId, startedAt: new Date().toISOString(), lastLocation: view.location, lastUpdated: view.lastUpdated, lastAcceptedAt: 0, lastPersistAt: 0, status: 'ACTIVE', staleNotified: false, workerConnected: true };
+          activeTracking.set(bookingId, state);
+        } else { state.workerConnected = true; }
+        io.to(room).emit('tracking:state', statePayload(view, state, 'The professional is sharing their location.'));
+      } else {
+        socket.emit('tracking:state', statePayload(view, null, 'Location is shared only after you start the journey.'));
       }
-
-      if (!activeTracking.has(bookingId)) {
-        activeTracking.set(bookingId, {
-          bookingId,
-          workerId: socket.user.id,
-          customerId: booking.customerId,
-          startedAt: new Date().toISOString(),
-          lastLocation: null,
-          status: 'ACTIVE'
-        });
-      }
-
-      const current = activeTracking.get(bookingId);
-      const statePayload = {
-        bookingId,
-        active: true,
-        workerId: socket.user.id,
-        customerId: booking.customerId,
-        startedAt: current.startedAt,
-        lastLocation: current.lastLocation,
-        message: 'Worker joined booking tracking room.'
-      };
-      io.to(room).emit('tracking:state', statePayload);
+      trackRespond(ack, { ok: true, tracking: view }, bookingId);
       return;
     }
 
-    if (socket.user.role === 'Customer') {
-      if (!(await isWorkerLocationSharingEnabled(booking.workerId))) {
-        stopBookingTracking(bookingId, 'Worker has stopped sharing location.');
-      }
+    const state = activeTracking.get(bookingId);
+    const msg = !view.sharing
+      ? (view.journeyStatus === 'WORKER_ARRIVED' ? 'The professional has arrived.' : 'Live tracking starts when the professional begins their journey.')
+      : (view.location ? (view.freshness === 'live' ? 'Tracking is live.' : 'Showing the last known position.') : 'The professional has started the journey. Waiting for their first location update.');
+    socket.emit('tracking:state', statePayload(view, state, msg));
+    trackRespond(ack, { ok: true, tracking: view }, bookingId);
+  });
 
-      const liveState = activeTracking.get(bookingId);
-      let initialLocation = liveState?.lastLocation || null;
+  const handleWorkerLocationUpdate = trackGuard(async (data, ack, bookingId) => {
+    const r = await trackingService.recordLocation({ bookingId, workerId: socket.user.id, latitude: data.latitude, longitude: data.longitude, accuracy: data.accuracy, timestamp: data.timestamp });
+    socket.join(trackingService.roomFor(bookingId));
+    (socket.data.trackingBookings = socket.data.trackingBookings || new Set()).add(bookingId);
+    trackRespond(ack, { ok: true, accepted: r.accepted, throttled: Boolean(r.throttled) }, bookingId);
+  });
 
-      if (!initialLocation && booking?.workerId) {
-        try {
-          const wp = await prisma.workerProfile.findUnique({
-            where: { userId: String(booking.workerId) },
-            select: {
-              locationSharing: {
-                select: { latitude: true, longitude: true, lastLocationUpdate: true, sharingEnabled: true }
-              }
-            }
-          });
-          const sharedLocation = wp?.locationSharing;
-          const isFresh = sharedLocation?.lastLocationUpdate && Date.now() - new Date(sharedLocation.lastLocationUpdate).getTime() <= 15 * 60 * 1000;
-          if (sharedLocation?.sharingEnabled && isFresh && sharedLocation.latitude != null && sharedLocation.longitude != null) {
-            initialLocation = {
-              latitude: Number(sharedLocation.latitude),
-              longitude: Number(sharedLocation.longitude),
-              timestamp: sharedLocation.lastLocationUpdate.toISOString()
-            };
-          }
-        } catch (err) {
-          console.warn('[Socket Tracking] Worker location lookup failed:', err.message);
-        }
-      }
-
-      socket.emit('tracking:state', {
-        bookingId,
-        active: !!liveState,
-        workerId: liveState?.workerId || booking.workerId,
-        customerId: liveState?.customerId || booking.customerId,
-        lastLocation: initialLocation,
-        startedAt: liveState?.startedAt || null,
-        message: liveState ? 'Tracking is active.' : (initialLocation ? 'Worker base location found. Live updates will follow when worker departs.' : 'Tracking has not started for this booking yet.')
-      });
-      return;
+  const handleBookingLeave = trackGuard(async ({ bookingId }, ack) => {
+    const { role } = await trackingService.loadForAccess(bookingId, socket.user.id);
+    socket.leave(trackingService.roomFor(bookingId));
+    if (role === 'Worker') {
+      // pausing: the last position stays (marked as not live); the journey itself is unchanged
+      trackingService.markWorkerGone(bookingId, 'worker_paused');
+      if (socket.data.trackingBookings) socket.data.trackingBookings.delete(bookingId);
     }
-  };
+    trackRespond(ack, { ok: true }, bookingId);
+  });
 
-  const handleWorkerLocationUpdate = async ({ bookingId, latitude, longitude, accuracy, timestamp } = {}) => {
-    const { authorized, reason, booking } = await verifyBookingTrackingAccess({
-      bookingId,
-      userId: socket.user?.id,
-      role: socket.user?.role
-    });
-
-    if (!authorized) {
-      socket.emit('tracking:error', { bookingId, message: reason });
-      return;
-    }
-
-    if (socket.user.role !== 'Worker') {
-      socket.emit('tracking:error', { bookingId, message: 'Only the assigned worker can send location updates' });
-      return;
-    }
-
-    if (String(socket.user.id) !== String(booking.workerId)) {
-      socket.emit('tracking:error', { bookingId, message: 'Spoofed worker ID rejected' });
-      return;
-    }
-
-    if (!(await isWorkerLocationSharingEnabled(socket.user.id))) {
-      stopWorkerTracking(socket.user.id);
-      socket.emit('tracking:error', { bookingId, message: 'Location sharing is disabled.' });
-      return;
-    }
-
-    let trackingState = activeTracking.get(bookingId);
-    if (!trackingState) {
-      trackingState = {
-        bookingId,
-        workerId: socket.user.id,
-        customerId: booking.customerId,
-        startedAt: new Date().toISOString(),
-        lastLocation: null,
-        status: 'ACTIVE'
-      };
-      activeTracking.set(bookingId, trackingState);
-      socket.join(bookingTrackingRoom(bookingId));
-    } else if (trackingState.workerId !== socket.user.id) {
-      socket.emit('tracking:error', { bookingId, message: 'No active tracking session for this booking' });
-      return;
-    }
-
-    const lat = Number(latitude);
-    const lng = Number(longitude);
-    if (!isValidCoordinate(lat, -90, 90) || !isValidCoordinate(lng, -180, 180)) {
-      socket.emit('tracking:error', { bookingId, message: 'Valid latitude and longitude are required' });
-      return;
-    }
-
-    const persisted = await persistWorkerLocation({
-      bookingId,
-      workerId: socket.user.id,
-      latitude: lat,
-      longitude: lng
-    });
-
-    trackingState.lastLocation = {
-      latitude: lat,
-      longitude: lng,
-      accuracy: Number.isFinite(Number(accuracy)) ? Number(accuracy) : null,
-      timestamp: timestamp || new Date().toISOString()
-    };
-    trackingState.lastUpdated = new Date().toISOString();
-    trackingState.lastPersistedToDb = persisted ? new Date().toISOString() : trackingState.lastPersistedToDb || null;
-
-    const payload = {
-      bookingId,
-      workerId: socket.user.id,
-      customerId: booking.customerId,
-      location: trackingState.lastLocation,
-      lastUpdated: trackingState.lastUpdated,
-      status: trackingState.status,
-      persistedToDb: persisted
-    };
-
-    io.to(bookingTrackingRoom(bookingId)).emit('worker:location:changed', payload);
-    io.to(bookingTrackingRoom(bookingId)).emit('tracking:location', payload);
-  };
-
-  const handleBookingLeave = async ({ bookingId } = {}) => {
-    const { authorized, reason, booking } = await verifyBookingTrackingAccess({
-      bookingId,
-      userId: socket.user?.id,
-      role: socket.user?.role
-    });
-
-    if (!authorized) {
-      socket.emit('tracking:error', { bookingId, message: reason });
-      return;
-    }
-
-    const room = bookingTrackingRoom(bookingId);
-    socket.leave(room);
-
-    if (socket.user.role === 'Worker') {
-      const trackingState = activeTracking.get(bookingId);
-      if (trackingState && trackingState.workerId === socket.user.id) {
-        activeTracking.delete(bookingId);
-        io.to(room).emit('tracking:stopped', {
-          bookingId,
-          workerId: socket.user.id,
-          customerId: booking.customerId,
-          message: 'Worker stopped sharing live location.'
-        });
-      }
-    }
-  };
-
-  // Real-time tracking events (supporting both Phase 5 spec and existing frontend aliases)
+  // Real-time tracking events (the original names are kept)
   socket.on('booking:join', handleBookingJoin);
   socket.on('tracking:subscribe', handleBookingJoin);
   socket.on('tracking:start', handleBookingJoin);
@@ -567,25 +334,13 @@ io.on('connection', (socket) => {
   socket.on('booking:leave', handleBookingLeave);
   socket.on('tracking:stop', handleBookingLeave);
 
+  // A worker whose connection dropped (browser closed, phone locked, network lost) must not look "live".
   socket.on('disconnect', () => {
-    const room = socket.data.trackingRoom;
-    if (!room || socket.user?.role !== 'Worker') {
-      console.log(`[Socket] User disconnected: ${socket.id}`);
-      return;
+    const bookings = socket.data.trackingBookings;
+    if (bookings && socket.user?.role === 'Worker') {
+      for (const bookingId of bookings) trackingService.markWorkerGone(bookingId, 'worker_disconnected');
     }
-
-    const bookingId = room.replace('booking:', '');
-    const trackingState = activeTracking.get(bookingId);
-    if (trackingState && trackingState.workerId === socket.user.id) {
-      activeTracking.delete(bookingId);
-      io.to(room).emit('tracking:stopped', {
-        bookingId,
-        workerId: socket.user.id,
-        message: 'Worker disconnected and stopped live location sharing.'
-      });
-    }
-
-    console.log(`[Socket] Worker disconnected from tracking room: ${room}`);
+    console.log(`[Socket] User disconnected: ${socket.id}`);
   });
 });
 
@@ -603,8 +358,13 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/escrow', escrowRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/push', pushRoutes);
+app.use('/api/worker', workerRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
 
 // ── Static Frontend Serving ──────────────────────────────────────────────────
 const publicDirectory = path.resolve(__dirname, '..', 'public');
@@ -618,6 +378,17 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(publicDirectory, 'index.html'));
 });
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Final error handler: JSON, no internals. Express's default handler would print a stack trace when NODE_ENV is not "production".
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err && /not allowed by CORS/i.test(err.message || '')) return res.status(403).json({ success: false, message: 'This origin is not allowed.' });
+  if (err && err.type === 'entity.parse.failed') return res.status(400).json({ success: false, message: 'The request body is not valid JSON.' });
+  if (err && err.type === 'entity.too.large') return res.status(413).json({ success: false, message: 'The request body is too large.' });
+  console.error('[Server] Unhandled error:', isProduction() ? (err && err.message) : err);
+  return res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+});
 
 const PORT = process.env.PORT || 5000;
 
@@ -650,6 +421,5 @@ module.exports = {
   bookingTrackingRoom,
   mapRole,
   stopBookingTracking,
-  stopWorkerTracking,
-  verifyBookingTrackingAccess
+  stopWorkerTracking
 };

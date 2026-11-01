@@ -33,8 +33,22 @@ const supabaseAdmin = (supabaseUrl && supabaseServiceRoleKey)
   ? createClient(supabaseUrl, supabaseServiceRoleKey, clientOptions)
   : null;
 
+// Fresh, isolated anon-key client for one auth operation. Auth calls must not share a client
+// because supabase-js keeps the last signed-in session in memory on the instance.
+// Pass { flowType: 'pkce', storage } for the OAuth code flow.
+const createAuthClient = (authOptions = {}) => {
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    ...clientOptions,
+    auth: { ...clientOptions.auth, detectSessionInUrl: false, ...authOptions }
+  });
+};
+
 module.exports = {
   supabase,
   supabaseAdmin,
+  createAuthClient,
+  // Email verification, password reset and Google OAuth all require both keys.
+  isAuthConfigured: () => Boolean(supabaseUrl && supabaseAnonKey && supabaseServiceRoleKey),
   isConfigured: () => Boolean(supabaseUrl && (supabaseAnonKey || supabaseServiceRoleKey))
 };

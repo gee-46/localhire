@@ -11,3 +11,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-01T21:42:10+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added strict startup environment validation in env.js to prevent silent misconfigurations and enforce secret hygiene across staging and production.
+
+### [2026-11-01] refactor(server): integrate startup configuration validation in main server
+- **Date:** 2026-11-01T22:58:45+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Integrated env.js validation into server.js bootstrap sequence and upgraded Supabase client configuration with connection tuning.
