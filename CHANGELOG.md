@@ -16,3 +16,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-01T22:58:45+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Integrated env.js validation into server.js bootstrap sequence and upgraded Supabase client configuration with connection tuning.
+
+### [2026-11-02] feat(db): add supabase auth link schema migration
+- **Date:** 2026-11-02T10:24:15+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Created database migration 20261102000000_supabase_auth_link to link local user profiles with Supabase auth uuid identifiers.
