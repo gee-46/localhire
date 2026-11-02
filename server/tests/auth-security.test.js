@@ -48,72 +48,7 @@ function loadBrowserScript(relativePath) {
   return context.window;
 }
 
-test('customer registration succeeds with valid input', async () => {
-  const originalFindUnique = prisma.user.findUnique;
-  const originalCreate = prisma.user.create;
-
-  prisma.user.findUnique = async () => null;
-  prisma.user.create = async ({ data }) => ({
-    id: 'user-customer-1',
-    email: data.email,
-    name: data.name,
-    phone: data.phone,
-    role: data.role,
-    avatarUrl: data.avatarUrl,
-    isActive: data.isActive,
-    isEmailVerified: data.isEmailVerified,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  });
-
-  try {
-    const req = { body: { name: 'Alice Customer', email: 'alice@example.com', password: 'secret123', role: 'customer' } };
-    const res = createMockResponse();
-
-    await authController.register(req, res);
-
-    assert.equal(res.statusCode, 201);
-    assert.equal(res.payload.success, true);
-    assert.equal(res.payload.user.role, 'Customer');
-    assert.equal(typeof res.payload.token, 'string');
-  } finally {
-    prisma.user.findUnique = originalFindUnique;
-    prisma.user.create = originalCreate;
-  }
-});
-
-test('worker registration succeeds with valid input', async () => {
-  const originalFindUnique = prisma.user.findUnique;
-  const originalCreate = prisma.user.create;
-
-  prisma.user.findUnique = async () => null;
-  prisma.user.create = async ({ data }) => ({
-    id: 'user-worker-1',
-    email: data.email,
-    name: data.name,
-    phone: data.phone,
-    role: data.role,
-    avatarUrl: data.avatarUrl,
-    isActive: data.isActive,
-    isEmailVerified: data.isEmailVerified,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  });
-
-  try {
-    const req = { body: { name: 'Bob Worker', email: 'bob@worker.com', password: 'secret123', role: 'worker' } };
-    const res = createMockResponse();
-
-    await authController.register(req, res);
-
-    assert.equal(res.statusCode, 201);
-    assert.equal(res.payload.success, true);
-    assert.equal(res.payload.user.role, 'Worker');
-  } finally {
-    prisma.user.findUnique = originalFindUnique;
-    prisma.user.create = originalCreate;
-  }
-});
+// Registration (verification email, no session) is covered in auth-email-flow.test.js
 
 test('admin or unsupported-role registration is rejected', async () => {
   const originalFindUnique = prisma.user.findUnique;
@@ -201,6 +136,7 @@ test('successful login establishes the expected auth state', async () => {
     assert.ok(res.payload);
     assert.equal(res.payload.success, true);
     assert.equal(res.payload.user.role, 'Customer');
+    assert.equal(typeof res.payload.token, 'string');
   } finally {
     prisma.user.findUnique = originalFindUnique;
     require('bcryptjs').compare = originalCompare;

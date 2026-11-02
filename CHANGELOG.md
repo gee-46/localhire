@@ -26,3 +26,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-02T14:38:40+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Implemented JWT token issuance and verification helpers, along with an automated smoke script for Supabase auth setup.
+
+### [2026-11-02] test(auth): add automated email and auth flow test suite
+- **Date:** 2026-11-02T19:15:52+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added comprehensive test suites verifying email verification flows, password reset security, and JWT privilege escalation protections.
