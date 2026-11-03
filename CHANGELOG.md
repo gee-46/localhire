@@ -31,3 +31,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-02T19:15:52+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added comprehensive test suites verifying email verification flows, password reset security, and JWT privilege escalation protections.
+
+### [2026-11-03] feat(db): add worker onboarding schema migration
+- **Date:** 2026-11-03T11:12:08+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added schema models for worker onboarding documents, ID verification records, and category specializations.
