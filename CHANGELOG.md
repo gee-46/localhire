@@ -36,3 +36,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-03T11:12:08+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added schema models for worker onboarding documents, ID verification records, and category specializations.
+
+### [2026-11-03] feat(worker): implement secure document storage and upload middleware
+- **Date:** 2026-11-03T15:45:30+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added secure private Supabase storage bucket handling for worker KYC documents with time-limited signed URL access and strict MIME filtering.
