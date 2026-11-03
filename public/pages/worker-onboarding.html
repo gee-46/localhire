@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Worker Onboarding | LocalHire</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .stepper { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        .step-pill { flex: 1; min-width: 110px; padding: 0.6rem 0.75rem; border-radius: 0.75rem; border: 1px solid var(--border-light); font-size: 0.8rem; text-align: center; cursor: default; color: var(--text-muted); background: transparent; }
+        .step-pill.reachable { cursor: pointer; color: var(--text-main); }
+        .step-pill.active { border-color: var(--primary); background: rgba(139, 92, 246, 0.12); color: var(--text-main); font-weight: 600; }
+        .step-pill.done::before { content: '✓ '; color: #10b981; }
+        .progress-track { height: 6px; border-radius: 9999px; background: rgba(0,0,0,0.08); margin-bottom: 1.5rem; overflow: hidden; }
+        .progress-fill { height: 100%; background: var(--primary); width: 0; transition: width 0.3s; }
+        .field-error { color: #ef4444; font-size: 0.8rem; margin-top: 0.35rem; display: none; }
+        .field-error.show { display: block; }
+        .step-panel { display: none; }
+        .step-panel.active { display: block; }
+        .doc-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border-light); flex-wrap: wrap; }
+        .status-chip { font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.6rem; border-radius: 9999px; border: 1px solid var(--border-light); }
+        .status-chip.VERIFIED { background: rgba(110,231,183,0.25); color: #065f46; border-color: rgba(110,231,183,0.6); }
+        .status-chip.REJECTED, .status-chip.RESUBMISSION_REQUIRED { background: rgba(239,68,68,0.12); color: #b91c1c; border-color: rgba(239,68,68,0.4); }
+        .status-chip.PENDING, .status-chip.UNDER_REVIEW { background: rgba(250,204,21,0.18); color: #854d0e; border-color: rgba(250,204,21,0.5); }
+        .notice { padding: 1rem 1.25rem; border-radius: 0.75rem; margin-bottom: 1.5rem; font-size: 0.9rem; border: 1px solid var(--border-light); }
+        .notice.warn { background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.35); }
+        .notice.info { background: rgba(56,189,248,0.08); border-color: rgba(56,189,248,0.35); }
+        .hours-row { display: grid; grid-template-columns: 110px 1fr 1fr; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
+        .check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.5rem; }
+        .review-block { margin-bottom: 1.5rem; }
+        .review-block h4 { margin-bottom: 0.5rem; }
+        .review-block dl { display: grid; grid-template-columns: 170px 1fr; gap: 0.4rem 1rem; font-size: 0.9rem; margin: 0; }
+        .review-block dt { color: var(--text-muted); }
+        .review-block dd { margin: 0; word-break: break-word; }
+        #toast { position: fixed; right: 1rem; bottom: 1rem; padding: 0.75rem 1.1rem; border-radius: 0.6rem; background: #0f172a; color: #fff; font-size: 0.9rem; display: none; z-index: 100; max-width: 340px; }
+    </style>
+</head>
+<body>
+    <div id="navbar-container"></div>
+    <div id="toast"></div>
+
+    <main class="container animate-fade-in" style="padding: 2.5rem 1.5rem; max-width: 860px; margin: 0 auto;">
+        <div style="margin-bottom: 1.5rem;">
+            <h2>Worker Onboarding</h2>
+            <p class="text-muted">Tell us about your work and verify your identity so customers can trust and hire you. You can save at any step and continue later.</p>
+        </div>
+
+        <div id="status-banner"></div>
+
+        <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+        <div id="stepper" class="stepper"></div>
+
+        <div id="loading" class="glass-card" style="text-align:center; padding:3rem;">Loading your application…</div>
+
+        <form id="wizard" class="glass-card" style="padding: 2rem; display: none;" novalidate>
+
+            <!-- STEP 1: PERSONAL -->
+            <section class="step-panel" data-step="1">
+                <h3 style="margin-bottom:1.25rem;">1. Personal details</h3>
+
+                <div class="flex items-center gap-6" style="margin-bottom: 1.75rem; flex-wrap: wrap;">
+                    <div style="width: 96px; height: 96px; border-radius: 50%; overflow: hidden; border: 3px solid var(--primary); background: var(--bg-dark); flex-shrink: 0;">
+                        <img id="photo-preview" alt="Profile photograph" style="width:100%; height:100%; object-fit:cover; display:none;">
+                        <div id="photo-placeholder" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:2.2rem; font-weight:bold; color:var(--primary);">?</div>
+                    </div>
+                    <div style="flex:1; min-width:220px;">
+                        <h4 style="margin:0 0 0.25rem 0;">Profile photograph <span style="color:#ef4444;">*</span></h4>
+                        <p class="text-muted" style="font-size:0.85rem; margin-bottom:0.75rem;">A clear photo of your face. JPG, PNG or WebP, up to 5 MB. This photo is shown publicly.</p>
+                        <label for="photo-input" class="btn btn-outline" style="cursor:pointer; padding:0.5rem 1rem; font-size:0.85rem;">Choose photo</label>
+                        <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp" style="display:none;">
+                        <div id="err-photo" class="field-error"></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md-grid-cols-2 gap-6">
+                    <div class="input-group">
+                        <label class="input-label" for="fullName">Full name <span style="color:#ef4444;">*</span></label>
+                        <input class="input-control" id="fullName" maxlength="100" autocomplete="name">
+                        <div id="err-fullName" class="field-error"></div>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="phone">Phone number <span style="color:#ef4444;">*</span></label>
+                        <input class="input-control" id="phone" type="tel" maxlength="20" placeholder="+91 98765 43210" autocomplete="tel">
+                        <div id="err-phone" class="field-error"></div>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="email">Email (your verified account)</label>
+                        <input class="input-control" id="email" disabled>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="city">City <span style="color:#ef4444;">*</span></label>
+                        <input class="input-control" id="city" maxlength="80" autocomplete="address-level2">
+                        <div id="err-city" class="field-error"></div>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="locality">Locality / area <span style="color:#ef4444;">*</span></label>
+                        <input class="input-control" id="locality" maxlength="80">
+                        <div id="err-locality" class="field-error"></div>
+                    </div>
+                </div>
+                <div class="input-group" style="margin-top:1.5rem;">
+                    <label class="input-label" for="address">Complete service address <span style="color:#ef4444;">*</span></label>
+                    <textarea class="input-control" id="address" rows="3" maxlength="300" placeholder="House / shop number, street, landmark, PIN code"></textarea>
+                    <div id="err-address" class="field-error"></div>
+                </div>
+            </section>
+
+            <!-- STEP 2: PROFESSIONAL -->
+            <section class="step-panel" data-step="2">
+                <h3 style="margin-bottom:1.25rem;">2. Professional details</h3>
+                <div class="grid grid-cols-1 md-grid-cols-2 gap-6">
+                    <div class="input-group">
+                        <label class="input-label" for="categoryId">Profession <span style="color:#ef4444;">*</span></label>
+                        <select class="input-control" id="categoryId" style="background-color: var(--bg-dark);"><option value="">Select your profession…</option></select>
+                        <div id="err-categoryId" class="field-error"></div>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="experienceYears">Years of experience <span style="color:#ef4444;">*</span></label>
+                        <input class="input-control" id="experienceYears" type="number" min="0" max="60" step="1">
+                        <div id="err-experienceYears" class="field-error"></div>
+                    </div>
+                </div>
+                <div class="input-group" style="margin-top:1.5rem;">
+                    <label class="input-label" for="skills">Skills and specializations <span style="color:#ef4444;">*</span></label>
+                    <input class="input-control" id="skills" placeholder="e.g. House wiring, Inverter installation, LED fittings (comma separated)">
+                    <div id="err-skills" class="field-error"></div>
+                </div>
+                <div class="input-group" style="margin-top:1.5rem;">
+                    <label class="input-label" for="description">Description of your services <span style="color:#ef4444;">*</span></label>
+                    <textarea class="input-control" id="description" rows="4" maxlength="1500" placeholder="What work do you do, what are you best at, and what can customers expect?"></textarea>
+                    <div class="text-muted" style="font-size:0.75rem;"><span id="description-count">0</span>/1500 (minimum 30)</div>
+                    <div id="err-description" class="field-error"></div>
+                </div>
+                <div class="input-group" style="margin-top:1.5rem;">
+                    <label class="input-label" for="previousExperience">Previous work experience</label>
+                    <textarea class="input-control" id="previousExperience" rows="3" maxlength="1500" placeholder="Employers, projects or years of independent work (optional)"></textarea>
+                </div>
+                <div class="input-group" style="margin-top:1.5rem;">
+                    <label class="input-label" for="languages">Languages spoken <span style="color:#ef4444;">*</span></label>
+                    <input class="input-control" id="languages" list="language-options" placeholder="e.g. English, Hindi, Kannada (comma separated)">
+                    <datalist id="language-options"><option value="English"><option value="Hindi"><option value="Kannada"><option value="Marathi"><option value="Tamil"><option value="Telugu"><option value="Malayalam"><option value="Konkani"><option value="Urdu"><option value="Bengali"><option value="Gujarati"></datalist>
+                    <div id="err-languages" class="field-error"></div>
+                </div>
+            </section>
+
+            <!-- STEP 3: IDENTITY -->
+            <section class="step-panel" data-step="3">
+                <h3 style="margin-bottom:0.5rem;">3. Identity verification</h3>
+                <div class="notice info">
+                    <strong>How we handle your documents.</strong> Upload <em>one</em> government-issued photo ID. Any of these is accepted: passport, driving licence, voter ID, PAN card or another government photo ID.
+                    <strong>We do not require Aadhaar.</strong> If you choose to use it, upload a <em>masked</em> copy that hides the first 8 digits. Never type an ID number anywhere on this site.
+                    Documents are stored privately, are visible only to LocalHire verification staff, and are never shown to customers.
+                </div>
+
+                <div class="grid grid-cols-1 md-grid-cols-2 gap-6" style="align-items:end;">
+                    <div class="input-group">
+                        <label class="input-label" for="doc-type">Document type</label>
+                        <select class="input-control" id="doc-type" style="background-color: var(--bg-dark);"></select>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="doc-file">File (PDF, JPG, PNG or WebP, up to 8 MB)</label>
+                        <input class="input-control" id="doc-file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp">
+                    </div>
+                </div>
+                <button type="button" id="doc-upload" class="btn btn-primary" style="margin-top:1rem;">Upload document</button>
+                <div id="err-identity" class="field-error"></div>
+                <div id="err-documents" class="field-error"></div>
+
+                <h4 style="margin:1.75rem 0 0.25rem;">Your documents</h4>
+                <div id="doc-list"><p class="text-muted" style="font-size:0.9rem;">Nothing uploaded yet.</p></div>
+                <p class="text-muted" style="font-size:0.8rem; margin-top:1rem;">Professional certificates and skill qualifications are optional but speed up approval for regulated trades such as electricians.</p>
+
+                <label style="display:flex; gap:0.6rem; margin-top:1.25rem; font-size:0.9rem; align-items:flex-start;">
+                    <input type="checkbox" id="idPolicyAcknowledged" style="margin-top:0.2rem;">
+                    <span>I understand how my documents are used and I am only uploading documents that belong to me.</span>
+                </label>
+                <div id="err-idPolicy" class="field-error"></div>
+            </section>
+
+            <!-- STEP 4: SERVICE -->
+            <section class="step-panel" data-step="4">
+                <h3 style="margin-bottom:1.25rem;">4. Service configuration</h3>
+                <div class="input-group">
+                    <label class="input-label">Other categories you also serve (optional, up to 5)</label>
+                    <div id="extra-categories" class="check-grid"></div>
+                    <div id="err-additionalCategoryIds" class="field-error"></div>
+                </div>
+                <div class="grid grid-cols-1 md-grid-cols-3 gap-6" style="margin-top:1.5rem;">
+                    <div class="input-group">
+                        <label class="input-label" for="hourlyRate">Hourly rate (₹)</label>
+                        <input class="input-control" id="hourlyRate" type="number" min="0" max="100000" step="1">
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="startingCharge">Starting / visit charge (₹)</label>
+                        <input class="input-control" id="startingCharge" type="number" min="0" max="100000" step="1">
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label" for="serviceRadiusKm">Service radius (km) <span style="color:#ef4444;">*</span></label>
+                        <input class="input-control" id="serviceRadiusKm" type="number" min="1" max="100" step="1">
+                        <div id="err-serviceRadiusKm" class="field-error"></div>
+                    </div>
+                </div>
+                <div id="err-pricing" class="field-error"></div>
+
+                <div class="input-group" style="margin-top:1.5rem;">
+                    <label class="input-label">Availability and working hours <span style="color:#ef4444;">*</span></label>
+                    <div id="hours"></div>
+                    <div id="err-workingHours" class="field-error"></div>
+                </div>
+            </section>
+
+            <!-- STEP 5: REVIEW -->
+            <section class="step-panel" data-step="5">
+                <h3 style="margin-bottom:1.25rem;">5. Review and submit</h3>
+                <div id="review"></div>
+                <label style="display:flex; gap:0.6rem; margin-top:0.5rem; font-size:0.9rem; align-items:flex-start;">
+                    <input type="checkbox" id="declaration" style="margin-top:0.2rem;">
+                    <span>I confirm that these details are accurate and I consent to LocalHire reviewing my documents to verify my identity.</span>
+                </label>
+                <div id="err-declaration" class="field-error"></div>
+                <div id="submit-problems" class="notice warn" style="display:none; margin-top:1rem;"></div>
+            </section>
+
+            <div class="flex items-center justify-between" style="margin-top: 2rem; gap: 0.75rem; flex-wrap: wrap;">
+                <button type="button" id="btn-back" class="btn btn-outline">Back</button>
+                <div class="flex gap-3" style="flex-wrap: wrap;">
+                    <button type="button" id="btn-save" class="btn btn-outline">Save and continue later</button>
+                    <button type="button" id="btn-next" class="btn btn-primary">Save and continue</button>
+                    <button type="button" id="btn-submit" class="btn btn-primary" style="display:none;">Submit for verification</button>
+                </div>
+            </div>
+        </form>
+    </main>
+
+    <script src="../js/data.js"></script>
+    <script src="../js/api.js"></script>
+    <script src="../js/app.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+        renderNavbar('navbar-container', 'pages');
+        const api = window.localHireAPI;
+        const user = window.localHireApp.getCurrentUser();
+        if (!user) { window.location.href = 'auth.html'; return; }
+        if (user.role !== 'Worker') { window.location.href = '../index.html'; return; }
+
+        const $ = (id) => document.getElementById(id);
+        const STEP_TITLES = ['Personal', 'Professional', 'Identity', 'Service', 'Review'];
+        const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const STATUS_TEXT = { PENDING: 'Pending review', UNDER_REVIEW: 'Under review', VERIFIED: 'Verified', REJECTED: 'Rejected', RESUBMISSION_REQUIRED: 'Resubmission required' };
+
+        let state = null;      // server onboarding state
+        let categories = [];
+        let step = 1;
+
+        const toast = (message) => {
+            const el = $('toast'); el.textContent = message; el.style.display = 'block';
+            clearTimeout(toast.t); toast.t = setTimeout(() => { el.style.display = 'none'; }, 3500);
+        };
+        const csv = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
+        const clearErrors = () => document.querySelectorAll('.field-error').forEach((e) => { e.textContent = ''; e.classList.remove('show'); });
+        const showErrors = (errors) => {
+            clearErrors();
+            Object.entries(errors || {}).forEach(([key, message]) => {
+                const el = $('err-' + key) || $('err-idPolicy');
+                if (el) { el.textContent = message; el.classList.add('show'); }
+            });
+        };
+        const locked = () => !state.canEdit;
+
+        // ── Rendering ───────────────────────────────────────────────────────────
+        function renderBanner() {
+            const box = $('status-banner');
+            const s = state.status;
+            let html = '';
+            if (s === 'PENDING' || s === 'UNDER_REVIEW') {
+                html = `<div class="notice info"><strong>${escapeHTML(STATUS_TEXT[s])}.</strong> Your application is with our verification team. You cannot edit it while it is being reviewed. <a href="worker-dashboard.html">Go to your dashboard</a>.</div>`;
+            } else if (s === 'VERIFIED') {
+                html = `<div class="notice info"><strong>Verified.</strong> Your profile is verified. <a href="worker-dashboard.html">Go to your dashboard</a>.</div>`;
+            } else if (s === 'RESUBMISSION_REQUIRED' || s === 'REJECTED') {
+                html = `<div class="notice warn"><strong>${s === 'REJECTED' ? 'Your application was not approved.' : 'We need a few changes.'}</strong><br>${escapeHTML(state.decisionReason || '')}<br><span class="text-muted">Update the details or documents below, then submit again.</span></div>`;
+            } else if (!state.canEdit && state.legacyVerificationStatus === 'VERIFIED') {
+                html = `<div class="notice info"><strong>Already verified.</strong> Your existing profile is verified by LocalHire. <a href="worker-dashboard.html">Go to your dashboard</a>.</div>`;
+            }
+            box.innerHTML = html;
+        }
+
+        function renderStepper() {
+            $('stepper').innerHTML = STEP_TITLES.map((title, i) => {
+                const n = i + 1;
+                const reachable = n <= Math.max(state.currentStep, 1) || locked();
+                return `<button type="button" class="step-pill ${n === step ? 'active' : ''} ${n < state.currentStep ? 'done' : ''} ${reachable ? 'reachable' : ''}" data-go="${n}">${n}. ${title}</button>`;
+            }).join('');
+            $('stepper').querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
+                const n = Number(b.dataset.go);
+                if (n <= Math.max(state.currentStep, 1) || locked()) go(n);
+            }));
+            const done = state.status ? 5 : Math.max(0, Math.min(state.currentStep, 5) - 1);
+            $('progress-fill').style.width = `${done / 5 * 100}%`;
+        }
+
+        function renderDocs() {
+            const list = $('doc-list');
+            if (!state.documents.length) { list.innerHTML = '<p class="text-muted" style="font-size:0.9rem;">Nothing uploaded yet.</p>'; return; }
+            list.innerHTML = state.documents.map((d) => `
+                <div class="doc-row">
+                    <div>
+                        <strong style="font-size:0.9rem;">${escapeHTML(d.typeLabel)}</strong>
+                        <div class="text-muted" style="font-size:0.78rem;">${escapeHTML(d.originalName)} · ${(d.sizeBytes / 1024).toFixed(0)} KB</div>
+                        ${d.rejectionReason ? `<div style="font-size:0.8rem; color:#b91c1c; margin-top:0.2rem;">Reviewer note: ${escapeHTML(d.rejectionReason)}</div>` : ''}
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="status-chip ${escapeHTML(d.status)}">${escapeHTML(STATUS_TEXT[d.status] || d.status)}</span>
+                        ${(!locked() && d.status !== 'VERIFIED') ? `<button type="button" class="btn btn-outline" data-del="${escapeHTML(d.id)}" style="padding:0.25rem 0.7rem; font-size:0.78rem;">Remove</button>` : ''}
+                    </div>
+                </div>`).join('');
+            list.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+                try { await api.deleteWorkerDocument(b.dataset.del); await refreshDocs(); toast('Document removed'); }
+                catch (e) { toast(e.message); }
+            }));
+        }
+
+        function renderPhoto() {
+            const url = state.account.avatarUrl;
+            $('photo-preview').style.display = url ? 'block' : 'none';
+            if (url) $('photo-preview').src = url;
+            $('photo-placeholder').style.display = url ? 'none' : 'flex';
+            $('photo-placeholder').textContent = (($('fullName').value || user.name || '?').charAt(0) || '?').toUpperCase();
+        }
+
+        function fillForm() {
+            const d = state.draft;
+            const p = d.personal || {}, pr = d.professional || {}, sv = d.service || {};
+            $('fullName').value = p.fullName || user.name || '';
+            $('phone').value = p.phone || '';
+            $('email').value = state.account.email || '';
+            $('city').value = p.city || '';
+            $('locality').value = p.locality || '';
+            $('address').value = p.address || '';
+            $('categoryId').value = pr.categoryId || '';
+            $('experienceYears').value = pr.experienceYears ?? '';
+            $('skills').value = (pr.skills || []).join(', ');
+            $('description').value = pr.description || '';
+            $('previousExperience').value = pr.previousExperience || '';
+            $('languages').value = (pr.languages || []).join(', ');
+            $('description-count').textContent = $('description').value.length;
+            $('hourlyRate').value = sv.hourlyRate ?? '';
+            $('startingCharge').value = sv.startingCharge ?? '';
+            $('serviceRadiusKm').value = sv.serviceRadiusKm ?? 15;
+            $('idPolicyAcknowledged').checked = Boolean(d.identity && d.identity.idPolicyAcknowledged);
+            $('declaration').checked = false;
+            renderExtraCategories(sv.additionalCategoryIds || []);
+            renderHours(sv.workingHours || []);
+            renderPhoto();
+            renderDocs();
+        }
+
+        function renderExtraCategories(selected) {
+            const primary = $('categoryId').value;
+            $('extra-categories').innerHTML = categories.filter((c) => c.id !== primary).map((c) => `
+                <label style="display:flex; gap:0.5rem; font-size:0.88rem; align-items:center;">
+                    <input type="checkbox" value="${escapeHTML(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}> ${escapeHTML(c.name)}
+                </label>`).join('');
+        }
+
+        function renderHours(rows) {
+            const byDay = new Map(rows.map((r) => [r.dayOfWeek, r]));
+            const hasAny = rows.length > 0;
+            const order = [1, 2, 3, 4, 5, 6, 0];
+            $('hours').innerHTML = order.map((day) => {
+                const r = byDay.get(day);
+                const active = hasAny ? Boolean(r && r.isActive) : (day >= 1 && day <= 5);
+                return `<div class="hours-row" data-day="${day}">
+                    <label style="display:flex; gap:0.5rem; align-items:center; font-size:0.9rem;"><input type="checkbox" class="h-active" ${active ? 'checked' : ''}> ${DAYS[day]}</label>
+                    <input type="time" class="input-control h-start" value="${escapeHTML((r && r.startTime) || '09:00')}">
+                    <input type="time" class="input-control h-end" value="${escapeHTML((r && r.endTime) || '18:00')}">
+                </div>`;
+            }).join('');
+        }
+
+        function renderReview() {
+            const d = collectAll();
+            const cat = (id) => (categories.find((c) => c.id === id) || {}).name || '—';
+            const row = (k, v) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v === '' || v === null || v === undefined ? '—' : v)}</dd>`;
+            const hours = d.service.workingHours.filter((h) => h.isActive).map((h) => `${DAYS[h.dayOfWeek].slice(0, 3)} ${h.startTime}–${h.endTime}`).join(', ');
+            $('review').innerHTML = `
+                <div class="review-block"><h4>Personal</h4><dl>
+                    ${row('Photo', state.account.avatarUrl ? 'Uploaded' : 'Missing')}${row('Name', d.personal.fullName)}${row('Phone', d.personal.phone)}
+                    ${row('Email', state.account.email)}${row('City', d.personal.city)}${row('Locality', d.personal.locality)}${row('Address', d.personal.address)}</dl></div>
+                <div class="review-block"><h4>Professional</h4><dl>
+                    ${row('Profession', cat(d.professional.categoryId))}${row('Experience', d.professional.experienceYears === null ? '' : d.professional.experienceYears + ' years')}
+                    ${row('Skills', d.professional.skills.join(', '))}${row('Languages', d.professional.languages.join(', '))}
+                    ${row('Description', d.professional.description)}${row('Previous experience', d.professional.previousExperience)}</dl></div>
+                <div class="review-block"><h4>Documents</h4><dl>
+                    ${state.documents.length ? state.documents.map((x) => row(x.typeLabel, `${x.originalName} (${STATUS_TEXT[x.status] || x.status})`)).join('') : row('Documents', 'None uploaded')}</dl></div>
+                <div class="review-block"><h4>Service</h4><dl>
+                    ${row('Other categories', d.service.additionalCategoryIds.map(cat).join(', '))}${row('Hourly rate', d.service.hourlyRate ? '₹' + d.service.hourlyRate : '')}
+                    ${row('Starting charge', d.service.startingCharge ? '₹' + d.service.startingCharge : '')}${row('Service radius', d.service.serviceRadiusKm ? d.service.serviceRadiusKm + ' km' : '')}
+                    ${row('Working hours', hours)}</dl></div>`;
+        }
+
+        // ── Collecting ──────────────────────────────────────────────────────────
+        function collectAll() {
+            return {
+                personal: { fullName: $('fullName').value, phone: $('phone').value, city: $('city').value, locality: $('locality').value, address: $('address').value },
+                professional: {
+                    categoryId: $('categoryId').value, experienceYears: $('experienceYears').value === '' ? null : Number($('experienceYears').value),
+                    skills: csv($('skills').value), description: $('description').value, previousExperience: $('previousExperience').value, languages: csv($('languages').value)
+                },
+                identity: { idPolicyAcknowledged: $('idPolicyAcknowledged').checked },
+                service: {
+                    additionalCategoryIds: Array.from($('extra-categories').querySelectorAll('input:checked')).map((i) => i.value),
+                    hourlyRate: $('hourlyRate').value, startingCharge: $('startingCharge').value, serviceRadiusKm: $('serviceRadiusKm').value,
+                    workingHours: Array.from($('hours').querySelectorAll('.hours-row')).map((r) => ({
+                        dayOfWeek: Number(r.dataset.day), isActive: r.querySelector('.h-active').checked,
+                        startTime: r.querySelector('.h-start').value || '09:00', endTime: r.querySelector('.h-end').value || '18:00'
+                    }))
+                }
+            };
+        }
+        const KEY = { 1: 'personal', 2: 'professional', 3: 'identity', 4: 'service' };
+
+        // ── Navigation / saving ─────────────────────────────────────────────────
+        function go(n) {
+            step = Math.max(1, Math.min(5, n));
+            document.querySelectorAll('.step-panel').forEach((p) => p.classList.toggle('active', Number(p.dataset.step) === step));
+            $('btn-back').style.visibility = step === 1 ? 'hidden' : 'visible';
+            $('btn-next').style.display = step === 5 ? 'none' : 'inline-flex';
+            $('btn-submit').style.display = step === 5 && !locked() ? 'inline-flex' : 'none';
+            $('btn-save').style.display = locked() ? 'none' : 'inline-flex';
+            $('btn-next').textContent = locked() ? 'Next' : 'Save and continue';
+            if (step === 5) renderReview();
+            renderStepper();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        async function saveStep(n, complete) {
+            if (locked()) return true;
+            clearErrors();
+            if (n === 5) return true;
+            if (n === 3 && complete && !$('idPolicyAcknowledged').checked) { showErrors({ idPolicy: 'Please confirm to continue.' }); return false; }
+            try {
+                const res = await api.saveWorkerOnboardingStep(n, collectAll()[KEY[n]], complete);
+                state.currentStep = Math.max(state.currentStep, res.currentStep);
+                if (!complete) showErrors({});
+                return true;
+            } catch (e) {
+                if (e.data && e.data.errors) showErrors(e.data.errors); else toast(e.message);
+                return false;
+            }
+        }
+
+        $('btn-next').addEventListener('click', async () => {
+            if (locked()) return go(step + 1);
+            $('btn-next').disabled = true;
+            try { if (await saveStep(step, true)) go(step + 1); } finally { $('btn-next').disabled = false; }
+        });
+        $('btn-back').addEventListener('click', () => go(step - 1));
+        $('btn-save').addEventListener('click', async () => {
+            if (await saveStep(step, false)) toast('Progress saved. You can come back any time.');
+        });
+
+        $('btn-submit').addEventListener('click', async () => {
+            clearErrors();
+            $('submit-problems').style.display = 'none';
+            if (!$('declaration').checked) { showErrors({ declaration: 'Please confirm to submit.' }); return; }
+            $('btn-submit').disabled = true;
+            try {
+                // Persist the latest values of every step before the server validates the whole application.
+                for (const n of [1, 2, 3, 4]) { await api.saveWorkerOnboardingStep(n, collectAll()[KEY[n]], false); }
+                await api.submitWorkerOnboarding(true);
+                window.location.href = 'worker-dashboard.html';
+            } catch (e) {
+                const problems = (e.data && e.data.problems) || [];
+                if (problems.length) {
+                    $('submit-problems').innerHTML = '<strong>Please fix the following before submitting:</strong><ul style="margin:0.5rem 0 0 1.1rem;">' +
+                        problems.map((p) => `<li>${escapeHTML(p.message)} <a href="#" data-fix="${Number(p.step)}">Go to step ${Number(p.step)}</a></li>`).join('') + '</ul>';
+                    $('submit-problems').style.display = 'block';
+                    $('submit-problems').querySelectorAll('[data-fix]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); go(Number(a.dataset.fix)); }));
+                } else { toast(e.message); }
+            } finally { $('btn-submit').disabled = false; }
+        });
+
+        // ── Photo + documents ───────────────────────────────────────────────────
+        $('photo-input').addEventListener('change', async (e) => {
+            const file = e.target.files && e.target.files[0];
+            e.target.value = '';
+            if (!file) return;
+            $('err-photo').classList.remove('show');
+            if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { $('err-photo').textContent = 'Use a JPG, PNG or WebP image.'; $('err-photo').classList.add('show'); return; }
+            if (file.size > 5 * 1024 * 1024) { $('err-photo').textContent = 'Image exceeds 5 MB.'; $('err-photo').classList.add('show'); return; }
+            toast('Uploading photo…');
+            const res = await api.uploadAvatar(file);
+            if (res && res.success) { state.account.avatarUrl = res.avatarUrl; renderPhoto(); toast('Photo uploaded'); }
+            else { $('err-photo').textContent = (res && res.message) || 'Upload failed.'; $('err-photo').classList.add('show'); }
+        });
+
+        $('doc-upload').addEventListener('click', async () => {
+            clearErrors();
+            const file = $('doc-file').files[0];
+            if (!file) { showErrors({ documents: 'Choose a file first.' }); return; }
+            if (file.size > 8 * 1024 * 1024) { showErrors({ documents: 'File exceeds 8 MB.' }); return; }
+            $('doc-upload').disabled = true;
+            try {
+                await api.uploadWorkerDocument($('doc-type').value, file);
+                $('doc-file').value = '';
+                await refreshDocs(); toast('Document uploaded and queued for review');
+            } catch (e) { showErrors({ documents: e.message }); }
+            finally { $('doc-upload').disabled = false; }
+        });
+
+        $('description').addEventListener('input', () => { $('description-count').textContent = $('description').value.length; });
+        $('categoryId').addEventListener('change', () => renderExtraCategories(collectAll().service.additionalCategoryIds));
+
+        // ── Boot ────────────────────────────────────────────────────────────────
+        // Refresh only the document list/status so unsaved edits elsewhere on the form are never overwritten.
+        async function refreshDocs() {
+            const fresh = await api.getWorkerOnboarding();
+            state.documents = fresh.documents;
+            state.status = fresh.status;
+            state.canEdit = fresh.canEdit;
+            state.decisionReason = fresh.decisionReason;
+            renderDocs(); renderBanner();
+        }
+
+        async function reload() {
+            const keepStep = step;
+            state = await api.getWorkerOnboarding();
+            const types = state.documentTypes;
+            const group = (g, label) => `<optgroup label="${label}">${types.filter((t) => t.group === g).map((t) => `<option value="${escapeHTML(t.type)}">${escapeHTML(t.label)}</option>`).join('')}</optgroup>`;
+            $('doc-type').innerHTML = group('IDENTITY', 'Government-issued photo ID') + group('CERTIFICATE', 'Professional certificate') + group('QUALIFICATION', 'Skill qualification');
+            fillForm(); renderBanner();
+            const inputs = $('wizard').querySelectorAll('input:not(#email), select, textarea');
+            inputs.forEach((i) => { i.disabled = locked(); });
+            $('photo-input').disabled = locked(); $('doc-file').disabled = locked(); $('doc-upload').disabled = locked();
+            go(keepStep);
+        }
+
+        try {
+            categories = await api.getCategories();
+            const select = $('categoryId');
+            categories.forEach((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name; select.appendChild(o); });
+            state = await api.getWorkerOnboarding();
+            step = state.status ? 5 : Math.min(Math.max(state.currentStep, 1), 5);
+            await reload();
+            $('loading').style.display = 'none';
+            $('wizard').style.display = 'block';
+        } catch (e) {
+            $('loading').textContent = e.status === 401 || e.status === 403 ? 'Please log in as a worker to continue.' : 'Could not load your application: ' + e.message;
+            if (e.status === 401) setTimeout(() => { window.location.href = 'auth.html'; }, 1200);
+        }
+    });
+    </script>
+</body>
+</html>
