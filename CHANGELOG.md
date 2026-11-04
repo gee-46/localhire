@@ -46,3 +46,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-03T20:20:18+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Built dedicated worker onboarding UI with document upload progress, step-by-step profile creation, and validation test suite.
+
+### [2026-11-04] feat(db): add genuine review counters schema migration
+- **Date:** 2026-11-04T09:55:12+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Created migration 20261104000000_genuine_review_counters to maintain cached ratings, completed booking counters, and review totals.
