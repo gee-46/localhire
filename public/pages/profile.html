@@ -3,519 +3,362 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Worker Profile | LocalHire</title>
-    <link rel="stylesheet" href="../css/style.css">
+    <title>Professional profile | LocalHire</title>
+    <meta name="theme-color" content="#5b3df5">
+    <link rel="stylesheet" href="../css/marketplace.css">
+    <link rel="stylesheet" href="../css/comm.css">
 </head>
-<body>
+<body class="lh">
+    <div id="lh-header"></div>
 
-    <div id="navbar-container"></div>
+    <main id="main" class="lh-main">
+        <div class="lh-container" style="padding-top:16px">
+            <a class="lh-link" id="back-link" href="category.html">← Back to results</a>
+            <div id="profile-root" aria-live="polite">
+                <div class="lh-card lh-p-head" style="margin-top:12px" aria-hidden="true">
+                    <span class="sk sk-circle" style="width:96px;height:96px"></span>
+                    <div style="flex:1"><div class="sk sk-line" style="width:50%;height:22px"></div><div class="sk sk-line" style="width:30%"></div><div class="sk sk-line" style="width:40%"></div></div>
+                </div>
+            </div>
+        </div>
+    </main>
 
-    <div class="container" style="padding: 3rem 1.5rem;" id="profile-content">
-        <!-- Content injected via JS -->
-        <div style="text-align: center; padding: 4rem;">Loading profile...</div>
+    <div id="bookbar-root"></div>
+    <div id="lh-bottom"></div>
+
+    <!-- Booking request sheet -->
+    <div class="lh-overlay" id="book-overlay">
+        <div class="lh-sheet" role="dialog" aria-modal="true" aria-labelledby="book-title" id="book-sheet"></div>
     </div>
+    <div class="lh-lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Portfolio photo"><img alt="" id="lightbox-img"></div>
 
     <script src="../js/data.js"></script>
+    <script src="../js/geo.js"></script>
     <script src="../js/api.js"></script>
     <script src="../js/app.js"></script>
+    <script src="../js/marketplace.js"></script>
+    <script src="../js/notifications.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', async () => {
-            renderNavbar('navbar-container', 'pages');
+    (async () => {
+        const $ = (s, r) => (r || document).querySelector(s);
+        const esc = LH.esc;
+        const u = LH.user();
+        LH.renderHeader($('#lh-header'), { active: 'browse' });
+        LH.renderBottomNav($('#lh-bottom'), 'browse');
+        await LH.location.restore();
 
-            const urlParams = new URLSearchParams(window.location.search);
-            const workerId = urlParams.get('id');
-            const container = document.getElementById('profile-content');
+        const isWorker = u && u.role === 'Worker';
+        const isAdmin = u && u.role === 'Admin';
+        const root = $('#profile-root');
+        $('#back-link').href = isWorker ? 'worker-dashboard.html' : (u ? 'category.html' : '../index.html');
+        $('#back-link').textContent = isWorker ? '← Back to Worker Hub' : '← Back to results';
 
-            // Determine role-aware "Back" link — Workers go to jobs.html, Customers/guests go to search.html
-            const _currentUser = window.localHireApp.getCurrentUser();
-            const _isWorker = _currentUser && _currentUser.role === 'Worker';
-            const backHref = _isWorker ? 'jobs.html' : 'search.html';
-            const backLabel = _isWorker ? 'Back to Jobs' : 'Back to Search';
+        const params = new URLSearchParams(window.location.search);
+        const workerId = params.get('id');
+        const notFound = (title, text) => { root.innerHTML = `<div style="margin-top:16px">${LH.stateBox({ icon: 'users', title, text, action: `<a class="lh-btn lh-btn-primary" href="${u ? 'customer-home.html' : '../index.html'}">Find another professional</a>` })}</div>`; };
+        if (!workerId) { notFound('Professional not found', 'The link is missing a professional.'); return; }
 
-            if (!workerId) {
-                container.innerHTML = `<div class="glass-card" style="text-align: center; padding: 4rem;"><h2>Worker not found</h2><a href="${backHref}" class="btn btn-primary" style="margin-top: 1rem;">${backLabel}</a></div>`;
-                return;
-            }
+        let worker;
+        try {
+            worker = (await LH.data.worker(workerId)).worker;
+        } catch (e) {
+            if (e.status === 404) notFound('This professional is not available', 'They may not be verified yet, or the profile no longer exists.');
+            else root.innerHTML = `<div style="margin-top:16px">${LH.stateBox({ icon: 'users', error: true, title: 'We could not load this profile', text: e.message, action: '<button class="lh-btn lh-btn-ghost" type="button" onclick="location.reload()">Try again</button>' })}</div>`;
+            return;
+        }
+        document.title = `${worker.name} · ${worker.category} | LocalHire`;
+        if (u && u.role === 'Customer' && worker.isVerified) LH.recent.add(worker.id);
 
-            let worker = null;
-            try {
-                if (window.localHireAPI && window.localHireAPI.getWorkerById) {
-                    worker = await window.localHireAPI.getWorkerById(workerId);
-                }
+        const isSelf = u && u.id === worker.id;
+        const canBook = u && u.role === 'Customer' && worker.isVerified;
 
-                if (!worker && window.localHireApp) {
-                    worker = window.localHireApp.getWorkerById(workerId);
-                }
-            } catch (error) {
-                console.error('[Profile] Worker lookup error:', error);
-                worker = null;
-            }
+        // ── Page body ─────────────────────────────────────────────────────────
+        const today = new Date().getDay();
+        const hoursHtml = (worker.workingHours && worker.workingHours.length)
+            ? `<div class="lh-hours">${worker.workingHours.map((h) => `<span class="${h.dayOfWeek === today ? 'today' : ''}">${LH.dayName[h.dayOfWeek]}${h.dayOfWeek === today ? ' (today)' : ''}</span><span class="${h.dayOfWeek === today ? 'today' : ''}">${esc(h.startTime)} – ${esc(h.endTime)}</span>`).join('')}</div>`
+            : '<p class="lh-help">This professional has not published working hours. Pick a time in your request and they will confirm it.</p>';
 
-            if (!worker) {
-                container.innerHTML = `<div class="glass-card" style="text-align: center; padding: 4rem;"><h2>Worker not found</h2><p class="text-muted" style="margin-top: 0.75rem;">The requested worker profile could not be loaded.</p><a href="${backHref}" class="btn btn-primary" style="margin-top: 1rem;">${backLabel}</a></div>`;
-                return;
-            }
+        const priceBlock = () => {
+            const rows = [];
+            if (worker.hourlyRate > 0) rows.push(['Hourly rate', `${LH.money(worker.hourlyRate)}/hr`]);
+            if (worker.startingCharge > 0) rows.push(['Visit / starting charge', LH.money(worker.startingCharge)]);
+            if (!rows.length) return '<p class="lh-help">This professional has not listed a price. Send a request with your proposed price and they will respond.</p>';
+            return `<dl class="lh-summary" style="grid-template-columns:200px 1fr">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd><strong>${esc(v)}</strong></dd>`).join('')}</dl>
+                <p class="lh-help" style="margin-top:10px">Prices are set by the professional. The final amount is agreed with them; nothing is charged when you send a request.</p>`;
+        };
 
-            if (worker && worker.id && worker.id !== workerId) {
-                const newUrl = new URL(window.location.href);
-                newUrl.searchParams.set('id', worker.id);
-                window.history.replaceState({}, '', newUrl.toString());
-            }
+        const portfolioHtml = (worker.portfolio && worker.portfolio.length)
+            ? `<div class="lh-gallery">${worker.portfolio.map((p, i) => `<button type="button" data-i="${i}" aria-label="View photo ${i + 1}${p.caption ? ': ' + esc(p.caption) : ''}"><img src="${esc(p.url)}" alt="${esc(p.caption || 'Work by ' + worker.name)}" loading="lazy"></button>`).join('')}</div>`
+            : '<p class="lh-help">This professional has not added portfolio photos yet.</p>';
 
-            try {
-                const availabilityText = worker.availability || 'Available Today';
-                const isAvailable = typeof availabilityText === 'string' && (availabilityText.includes('Today') || availabilityText.includes('Now'));
-                const workerLocationText = typeof worker.location === 'string'
-                    ? worker.location
-                    : (worker.location && worker.location.address) || 'Nearby';
+        const bookPanel = (variant) => {
+            const price = worker.startingPrice !== null ? `<div class="lh-price" style="margin-bottom:4px">From ${LH.money(worker.startingPrice)}<small>${worker.priceUnit === 'visit' ? ' visit charge' : '/hr'}</small></div>` : '';
+            let action;
+            if (isSelf) action = '<a class="lh-btn lh-btn-ghost lh-btn-block" href="edit-profile.html">Edit my profile</a>';
+            else if (isWorker) action = '<p class="lh-help">Worker accounts can\'t book other professionals. Use a customer account to hire.</p>';
+            else if (isAdmin) action = '<p class="lh-help">Admin preview. Bookings are made from customer accounts.</p>';
+            else if (!u) action = '<a class="lh-btn lh-btn-primary lh-btn-block" href="auth.html">Sign in to book</a>';
+            else if (!worker.isVerified) action = '<div class="lh-alert warn">Not available for new bookings. This professional is not currently verified. Your existing bookings are not affected.</div>';
+            else action = '<button class="lh-btn lh-btn-primary lh-btn-block" type="button" data-book>Book now</button>';
+            return `<aside class="lh-card lh-book-panel ${variant}" aria-label="Booking">
+                ${price}<div style="margin:6px 0 12px">${LH.availabilityPill(worker)}</div>${action}
+                ${canBook ? `<button class="lh-btn lh-btn-ghost lh-btn-block" type="button" id="btn-fav" style="margin-top:8px"></button>
+                <a class="lh-btn lh-btn-ghost lh-btn-block" style="margin-top:8px" href="chat.html?userId=${encodeURIComponent(worker.id)}">Message</a>` : ''}
+                <ul class="lh-help" style="list-style:none;padding:0;margin:14px 0 0;display:grid;gap:6px">
+                    <li>✓ Identity verified by LocalHire</li><li>✓ No payment is taken when you send a request</li><li>✓ Ratings only from completed bookings</li></ul></aside>`;
+        };
 
-                const safeName = escapeHTML(worker.name || 'Worker');
-                const safeCategory = escapeHTML(worker.category || 'General');
-                const safeSubCategory = escapeHTML(worker.subCategory || '');
-                const safeBio = escapeHTML(worker.bio || '');
-                const safeExperience = escapeHTML(worker.experience || '0 years');
-                const safeAvailability = escapeHTML(worker.availability || 'Available Today');
-                const safeAvatar = worker.avatarUrl ? escapeHTML(worker.avatarUrl) : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(worker.name || 'worker')}`;
-                const safeSkills = (worker.skills || []).map(skill => `<span class="badge" style="font-size: 0.85rem; padding: 0.35rem 0.75rem;">${escapeHTML(skill)}</span>`).join('');
-                const safeFirstName = escapeHTML((worker.name || 'Worker').split(' ')[0]);
-
-                container.innerHTML = `
-                <a href="${backHref}" class="flex items-center gap-1 text-muted hover:text-white" style="text-decoration: none; margin-bottom: 2rem; display: inline-flex;">
-                    <svg class="icon" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
-                    ${backLabel}
-                </a>
-
-                <div class="flex gap-8" style="flex-wrap: wrap;">
-                    
-                    <!-- Left Column: Main Info -->
-                    <main style="flex: 1; min-width: 300px;">
-                        <div class="glass-card flex items-center gap-6" style="margin-bottom: 2rem; flex-wrap: wrap;">
-                            <img src="${safeAvatar}" alt="${safeName}" style="width: 120px; height: 120px; border-radius: 50%; border: 3px solid var(--primary); object-fit: cover;">
-                            <div style="flex-grow: 1;">
-                                <div class="flex justify-between items-start" style="flex-wrap: wrap; gap: 1rem;">
-                                    <div>
-                                        <h1 style="font-size: 2rem; margin-bottom: 0;">${safeName}</h1>
-                                        <p style="font-size: 1.1rem; color: var(--secondary); margin-bottom: 0.5rem;">${safeCategory} ${safeSubCategory ? '- ' + safeSubCategory : ''}</p>
-                                        <div class="flex items-center gap-2">
-                                            ${renderStars(worker.rating)}
-                                            <span style="font-weight: 600;">${Number(worker.rating || 5.0)}</span>
-                                            <a href="#reviews" style="color: var(--text-muted); text-decoration: underline;">(${Number(worker.reviewsCount || 0)} reviews)</a>
-                                        </div>
-                                    </div>
-                                    <div style="text-align: right;">
-                                        <div style="font-size: 2rem; font-weight: 800; color: var(--text-main);">₹${Number(worker.hourlyRate || 0)}<span style="font-size: 1rem; font-weight: 500; color: var(--text-muted);">/hr</span></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="glass-card" style="margin-bottom: 2rem;">
-                            <h3>About</h3>
-                            <p style="color: var(--text-muted); line-height: 1.8; margin-top: 1rem; font-size: 1.05rem;">
-                                ${safeBio}
-                            </p>
-                        </div>
-
-                        <div class="glass-card" id="reviews">
-                            <h3 style="margin-bottom: 1.5rem;">Recent Reviews</h3>
-                            <!-- Mock Reviews -->
-                            <div style="border-bottom: 1px solid var(--border-light); padding-bottom: 1.5rem; margin-bottom: 1.5rem;">
-                                <div class="flex items-center justify-between" style="margin-bottom: 0.5rem;">
-                                    <span style="font-weight: 600;">Excellent service!</span>
-                                    <span class="text-muted" style="font-size: 0.85rem;">2 weeks ago</span>
-                                </div>
-                                <div style="margin-bottom: 0.5rem;">${renderStars(5)}</div>
-                                <p class="text-muted" style="font-size: 0.95rem;">${safeName} was incredibly professional and solved my problem in half the time I expected. Highly recommended!</p>
-                            </div>
-                            <div>
-                                <div class="flex items-center justify-between" style="margin-bottom: 0.5rem;">
-                                    <span style="font-weight: 600;">Very solid work</span>
-                                    <span class="text-muted" style="font-size: 0.85rem;">1 month ago</span>
-                                </div>
-                                <div style="margin-bottom: 0.5rem;">${renderStars(4.5)}</div>
-                                <p class="text-muted" style="font-size: 0.95rem;">Great communication throughout the process. The work quality was exactly what I was hoping for.</p>
-                            </div>
-                        </div>
-                    </main>
-
-                    <!-- Right Column: Actions & Details -->
-                    <aside style="width: 100%; max-width: 350px; flex-shrink: 0;">
-                        <div class="glass-card" style="position: sticky; top: 100px;">
-                            
-                            <div style="margin-bottom: 2rem;" id="profile-actions">
-                                <!-- Actions injected below -->
-                            </div>
-
-                            <div style="margin-bottom: 2rem;">
-                                <h4 style="margin-bottom: 1rem; border-bottom: 1px solid var(--border-light); padding-bottom: 0.5rem;">Details</h4>
-                                
-                                <div class="flex items-center gap-3" style="margin-bottom: 1rem;">
-                                    <svg class="icon text-muted" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                                    <span id="worker-loc"></span>
-                                </div>
-                                
-                                <div class="flex items-center gap-3" style="margin-bottom: 1rem;">
-                                    <svg class="icon text-muted" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                                    <span class="text-muted" style="font-size: 0.9rem;">Service availability within 5-10 km radius</span>
-                                </div>
-                                <div class="flex items-center gap-3" style="margin-bottom: 1rem;">
-                                    <svg class="icon text-muted" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                                    <span class="${isAvailable ? 'text-gradient' : ''}" style="font-weight: 500;">${safeAvailability}</span>
-                                </div>
-                                
-                                <div class="flex items-center gap-3">
-                                    <svg class="icon text-muted" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                                    <span>${safeExperience} Experience</span>
-                                </div>
-                            </div>
-
-                            <div>
-                                <h4 style="margin-bottom: 1rem; border-bottom: 1px solid var(--border-light); padding-bottom: 0.5rem;">Skills</h4>
-                                <div class="flex gap-2" style="flex-wrap: wrap;">
-                                    ${safeSkills}
-                                </div>
-                            </div>
-
-                        </div>
-                    </aside>
-
+        root.innerHTML = `
+            <div class="lh-card lh-p-head" style="margin-top:12px">
+                ${LH.avatar(worker, 104)}
+                <div style="min-width:0;flex:1">
+                    <h1 class="display">${esc(worker.name)}${worker.isVerified ? LH.verifiedBadge() : ''}</h1>
+                    <div class="lh-wsub" style="font-size:16px">${esc(worker.category)}${worker.additionalCategories && worker.additionalCategories.length ? ' · also ' + esc(worker.additionalCategories.join(', ')) : ''}</div>
+                    <div style="margin:6px 0" id="head-rating">${LH.ratingHtml(worker)}</div>
+                    <div class="lh-meta"><span>${LH.icon('clock')}${esc(LH.experienceText(worker))}</span>
+                        ${worker.serviceArea ? `<span>${LH.icon('pin')}${esc(worker.serviceArea)}${worker.serviceRadiusKm ? ' · travels up to ' + Number(worker.serviceRadiusKm) + ' km' : ''}</span>` : ''}</div>
                 </div>
-            `;
+            </div>
+            <div class="lh-profile-layout">
+                <div style="display:grid;gap:16px">
+                    ${bookPanel('mobile-only')}
+                    <section class="lh-card lh-block"><h2>About ${esc(worker.name.split(' ')[0])}</h2>
+                        ${worker.bio ? `<p style="color:var(--lh-ink-2);white-space:pre-line">${esc(worker.bio)}</p>` : '<p class="lh-help">No biography added yet.</p>'}
+                        ${worker.skills && worker.skills.length ? `<h3 style="font-size:14px;margin:16px 0 8px">Skills &amp; specialisations</h3><div class="lh-tagrow">${worker.skills.map((s) => `<span class="lh-tag">${esc(s)}</span>`).join('')}</div>` : ''}
+                        ${worker.languages && worker.languages.length ? `<h3 style="font-size:14px;margin:16px 0 8px">Languages</h3><div class="lh-tagrow">${worker.languages.map((s) => `<span class="lh-tag">${esc(s)}</span>`).join('')}</div>` : ''}</section>
+                    <section class="lh-card lh-block" aria-labelledby="h-price"><h2 id="h-price">Pricing</h2>${priceBlock()}</section>
+                    <section class="lh-card lh-block" aria-labelledby="h-hours"><h2 id="h-hours">Availability &amp; working hours</h2>
+                        <p style="margin-bottom:10px">${LH.availabilityPill(worker)}</p>${hoursHtml}</section>
+                    <section class="lh-card lh-block" aria-labelledby="h-port"><h2 id="h-port">Portfolio</h2>${portfolioHtml}</section>
+                    <section class="lh-card lh-block" aria-labelledby="h-rev" id="reviews"><h2 id="h-rev">Reviews</h2><div id="reviews-root"><div class="sk sk-line" style="width:40%"></div><div class="sk sk-line"></div></div></section>
+                </div>
+                ${bookPanel('sticky desktop-only')}
+            </div>`;
 
-            // Calculate active distance
-            const locSpan = document.getElementById('worker-loc');
-            if (worker.lat && worker.lng) {
-                const savedLoc = window.localHireApp.getUserLocation();
-                if (savedLoc) {
-                    const dist = window.localHireApp.calculateDistance(savedLoc.lat, savedLoc.lng, worker.lat, worker.lng);
-                    locSpan.textContent = `${dist} km away`;
-                } else {
-                    locSpan.textContent = workerLocationText;
-                }
-            } else {
-                locSpan.textContent = workerLocationText;
-            }
+        // Mobile bottom bar with the primary action
+        if (canBook) {
+            document.body.classList.add('has-bookbar');
+            $('#bookbar-root').innerHTML = `<div class="lh-bookbar"><div>${worker.startingPrice !== null ? `<div class="lh-price">From ${LH.money(worker.startingPrice)}<small>${worker.priceUnit === 'visit' ? ' visit' : '/hr'}</small></div>` : ''}${LH.availabilityPill(worker)}</div><button class="lh-btn lh-btn-primary" type="button" data-book>Book now</button></div>`;
+        }
 
-            // Authentication & Actions Injection
-            const currentUser = window.localHireApp.getCurrentUser();
-            const actionContainer = document.getElementById('profile-actions');
-            
-            if (currentUser && currentUser.id === worker.id) {
-                actionContainer.innerHTML = `
-                    <button class="btn btn-outline" onclick="window.location.href='edit-profile.html'" style="width: 100%; padding: 1rem; font-size: 1.1rem;">
-                        Edit My Profile
-                    </button>
-                `;
-            } else if (currentUser && currentUser.role === 'Customer') {
-                const isFav = currentUser.favorites && currentUser.favorites.includes(worker.id);
-                const favStyle = isFav ? 'color: #ef4444; border-color: #ef4444; background: rgba(239, 68, 68, 0.1);' : '';
-                const favText = isFav ? 'Saved' : 'Save Worker';
-                
-                actionContainer.innerHTML = `
-                    <button id="btn-open-hire-modal" class="btn btn-primary" style="width: 100%; padding: 1rem; font-size: 1.1rem; margin-bottom: 0.75rem;">
-                        Hire ${safeFirstName} Now
-                    </button>
-                    <button id="btn-fav" class="btn btn-outline" style="width: 100%; padding: 0.85rem; ${favStyle}">
-                        <svg class="icon" viewBox="0 0 24 24" style="margin-right: 0.5rem; ${isFav ? 'fill: currentColor; stroke: none;' : ''}"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
-                        ${favText}
-                    </button>
-                    <button class="btn btn-outline" onclick="window.location.href='chat.html?userId=${encodeURIComponent(worker.id || worker._id)}'" style="width: 100%; margin-top: 0.75rem; padding: 0.85rem;">
-                        Message
-                    </button>
-                `;
+        // Lightbox
+        const lb = $('#lightbox');
+        root.querySelectorAll('.lh-gallery button').forEach((b) => b.addEventListener('click', () => { $('#lightbox-img').src = worker.portfolio[Number(b.dataset.i)].url; lb.classList.add('open'); }));
+        lb.addEventListener('click', () => lb.classList.remove('open'));
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') lb.classList.remove('open'); });
 
-                // Inject Booking Modal into DOM
-                const modalHtml = `
-                    <div id="booking-modal" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(8px); z-index: 1000; align-items: center; justify-content: center; padding: 1.5rem;">
-                        <div class="glass-card animate-fade-in flex flex-col" style="width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; padding: 2rem;">
-                            <div class="flex justify-between items-start" style="margin-bottom: 1.5rem;">
-                                <div>
-                                    <h3 style="margin: 0; font-size: 1.35rem;">Hire ${safeName}</h3>
-                                    <p class="text-muted" style="margin: 0.25rem 0 0 0; font-size: 0.85rem;">${safeCategory} • Base Rate: ₹${Number(worker.hourlyRate || 0)}/hr</p>
-                                </div>
-                                <button type="button" class="btn" id="close-booking-modal" style="padding: 0; background: transparent; color: var(--text-muted); font-size: 1.5rem; line-height: 1;">&times;</button>
-                            </div>
-
-                            <form id="booking-form" class="flex flex-col gap-4" novalidate>
-                                <div>
-                                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Scheduled Date</label>
-                                    <input type="date" id="booking-date" class="input-control" required>
-                                </div>
-
-                                <div>
-                                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Preferred Time Slot</label>
-                                    <select id="booking-slot" class="input-control">
-                                        <option value="Morning (09:00 - 12:00)">Morning (09:00 - 12:00)</option>
-                                        <option value="Afternoon (12:00 - 16:00)" selected>Afternoon (12:00 - 16:00)</option>
-                                        <option value="Evening (16:00 - 20:00)">Evening (16:00 - 20:00)</option>
-                                        <option value="Flexible">Flexible</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Agreed Price (₹)</label>
-                                    <input type="number" id="booking-price" class="input-control" value="${worker.hourlyRate || 500}" min="50" step="50" required>
-                                    <span class="text-muted" style="font-size: 0.75rem;">Total agreed service amount</span>
-                                </div>
-
-                                <div>
-                                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Service Address</label>
-                                    <div id="booking-address-container" class="flex flex-col gap-2">
-                                        <select id="booking-address-select" class="input-control">
-                                            <option value="">Loading saved addresses...</option>
-                                        </select>
-                                        <div class="flex gap-2">
-                                            <button type="button" id="btn-toggle-address-form" class="btn btn-outline" style="flex: 1; padding: 0.7rem 1rem;">Add a New Address</button>
-                                            <button type="button" id="btn-refresh-addresses" class="btn btn-outline" style="padding: 0.7rem 0.9rem;">Refresh</button>
-                                        </div>
-                                        <div id="booking-address-form" style="display: none; border: 1px solid var(--border-light); border-radius: 12px; padding: 1rem; background: rgba(15, 23, 42, 0.2);">
-                                            <div class="grid grid-cols-1 md-grid-cols-2 gap-3">
-                                                <div>
-                                                    <label style="display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem;">Label</label>
-                                                    <input type="text" id="address-label" class="input-control" placeholder="Home, Office...">
-                                                </div>
-                                                <div>
-                                                    <label style="display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem;">Flat / House No.</label>
-                                                    <input type="text" id="address-flat" class="input-control" placeholder="A-204">
-                                                </div>
-                                                <div class="md:col-span-2">
-                                                    <label style="display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem;">Street Address</label>
-                                                    <input type="text" id="address-street" class="input-control" placeholder="123 Main Road">
-                                                </div>
-                                                <div>
-                                                    <label style="display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem;">Landmark</label>
-                                                    <input type="text" id="address-landmark" class="input-control" placeholder="Near Metro station">
-                                                </div>
-                                                <div>
-                                                    <label style="display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem;">City</label>
-                                                    <input type="text" id="address-city" class="input-control" placeholder="Bengaluru">
-                                                </div>
-                                                <div>
-                                                    <label style="display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem;">State</label>
-                                                    <input type="text" id="address-state" class="input-control" placeholder="Karnataka">
-                                                </div>
-                                                <div>
-                                                    <label style="display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem;">Postal Code</label>
-                                                    <input type="text" id="address-postal" class="input-control" placeholder="560001">
-                                                </div>
-                                            </div>
-                                            <div class="flex justify-end" style="margin-top: 0.75rem;">
-                                                <button type="button" id="btn-save-address-inline" class="btn btn-primary" style="padding: 0.65rem 1rem;">Save Address</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Job Description / Instructions</label>
-                                    <textarea id="booking-notes" class="input-control" rows="3" placeholder="Describe the specific task or issue to resolve..."></textarea>
-                                </div>
-
-                                <div id="booking-status-msg" style="display: none; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.9rem;"></div>
-
-                                <div class="flex gap-3 justify-end" style="margin-top: 0.5rem;">
-                                    <button type="button" class="btn btn-outline" id="btn-cancel-booking" style="cursor: pointer;">Cancel</button>
-                                    <button type="submit" class="btn btn-primary" id="btn-submit-booking" style="cursor: pointer;">Confirm & Send Request</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.body.insertAdjacentHTML('beforeend', modalHtml);
-
-                // Modal Elements & Handlers
-                const bookingModal = document.getElementById('booking-modal');
-                const btnOpenHire = document.getElementById('btn-open-hire-modal');
-                const btnCloseHire = document.getElementById('close-booking-modal');
-                const btnCancelHire = document.getElementById('btn-cancel-booking');
-                const bookingForm = document.getElementById('booking-form');
-                const bookingDateInput = document.getElementById('booking-date');
-                const bookingStatusMsg = document.getElementById('booking-status-msg');
-                const btnSubmitBooking = document.getElementById('btn-submit-booking');
-                const bookingAddressSelect = document.getElementById('booking-address-select');
-                const bookingAddressForm = document.getElementById('booking-address-form');
-                const btnToggleAddressForm = document.getElementById('btn-toggle-address-form');
-                const btnRefreshAddresses = document.getElementById('btn-refresh-addresses');
-                const btnSaveAddressInline = document.getElementById('btn-save-address-inline');
-
-                const loadSavedAddresses = async () => {
-                    const result = await window.localHireAPI.getAddresses();
-                    const select = bookingAddressSelect;
-                    if (!select) return;
-
-                    if (!result || !result.success || !Array.isArray(result.addresses) || result.addresses.length === 0) {
-                        select.innerHTML = '<option value="">No saved addresses yet — add one below</option>';
-                        return;
-                    }
-
-                    const defaultAddress = result.addresses.find(address => address.isDefault) || result.addresses[0];
-                    select.innerHTML = result.addresses.map(address => `
-                        <option value="${address.id}" ${defaultAddress && address.id === defaultAddress.id ? 'selected' : ''}>
-                            ${address.label || 'Address'} — ${address.street}, ${address.city}
-                        </option>
-                    `).join('');
-                };
-
-                const saveInlineAddress = async () => {
-                    const payload = {
-                        label: document.getElementById('address-label').value.trim() || 'Home',
-                        flatNumber: document.getElementById('address-flat').value.trim() || null,
-                        street: document.getElementById('address-street').value.trim(),
-                        landmark: document.getElementById('address-landmark').value.trim() || null,
-                        city: document.getElementById('address-city').value.trim(),
-                        state: document.getElementById('address-state').value.trim() || null,
-                        postalCode: document.getElementById('address-postal').value.trim(),
-                        isDefault: true
-                    };
-
-                    if (!payload.street || !payload.city || !payload.postalCode) {
-                        alert('Please enter a street, city, and postal code for the new address.');
-                        return;
-                    }
-
-                    const result = await window.localHireAPI.createAddress(payload);
-                    if (!result || !result.success) {
-                        alert(result && result.message ? result.message : 'Unable to save the address right now.');
-                        return;
-                    }
-
-                    bookingAddressForm.style.display = 'none';
-                    document.getElementById('address-label').value = '';
-                    document.getElementById('address-flat').value = '';
-                    document.getElementById('address-street').value = '';
-                    document.getElementById('address-landmark').value = '';
-                    document.getElementById('address-city').value = '';
-                    document.getElementById('address-state').value = '';
-                    document.getElementById('address-postal').value = '';
-                    await loadSavedAddresses();
-                    alert('Address saved successfully.');
-                };
-
-                // Default date to tomorrow
-                const tomorrow = new Date();
-                tomorrow.setDate(tomorrow.getDate() + 1);
-                const minDate = tomorrow.toISOString().split('T')[0];
-                bookingDateInput.min = minDate;
-                bookingDateInput.value = minDate;
-
-                btnOpenHire.addEventListener('click', async () => {
-                    bookingStatusMsg.style.display = 'none';
-                    bookingModal.style.display = 'flex';
-                    await loadSavedAddresses();
-                });
-
-                btnRefreshAddresses.addEventListener('click', loadSavedAddresses);
-                btnToggleAddressForm.addEventListener('click', () => {
-                    bookingAddressForm.style.display = bookingAddressForm.style.display === 'none' ? 'block' : 'none';
-                });
-                btnSaveAddressInline.addEventListener('click', saveInlineAddress);
-
-                const closeModal = () => {
-                    bookingModal.style.display = 'none';
-                };
-
-                btnCloseHire.addEventListener('click', closeModal);
-                btnCancelHire.addEventListener('click', closeModal);
-
-                let isSubmitting = false;
-                const handleBookingSubmit = async (e) => {
-                    if (e && e.preventDefault) e.preventDefault();
-                    if (isSubmitting) return;
-
-                    const dateVal = bookingDateInput.value;
-                    const slotVal = document.getElementById('booking-slot').value;
-                    const priceVal = parseFloat(document.getElementById('booking-price').value);
-                    const notesVal = document.getElementById('booking-notes').value.trim();
-
-                    if (!dateVal) {
-                        alert('Please choose a service date.');
-                        return;
-                    }
-
-                    if (isNaN(priceVal) || priceVal <= 0) {
-                        alert('Please enter a valid price.');
-                        return;
-                    }
-
-                    isSubmitting = true;
-                    btnSubmitBooking.disabled = true;
-                    btnSubmitBooking.textContent = 'Submitting Booking...';
-                    bookingStatusMsg.style.display = 'block';
-                    bookingStatusMsg.style.background = 'rgba(59, 130, 246, 0.15)';
-                    bookingStatusMsg.style.color = '#60a5fa';
-                    bookingStatusMsg.style.border = '1px solid rgba(59, 130, 246, 0.3)';
-                    bookingStatusMsg.textContent = 'Sending booking request to server...';
-
-                    const selectedAddressId = bookingAddressSelect && bookingAddressSelect.value ? bookingAddressSelect.value : undefined;
-                    const bookingPayload = {
-                        workerId: worker.id || worker._id,
-                        scheduledAt: new Date(dateVal + 'T10:00:00Z').toISOString(),
-                        timeSlot: slotVal,
-                        agreedPrice: priceVal,
-                        notes: notesVal,
-                        addressId: selectedAddressId
-                    };
-
-                    try {
-                        const result = await window.localHireAPI.createBooking(bookingPayload);
-
-                        if (result && result.success) {
-                            bookingStatusMsg.style.background = 'rgba(34, 197, 94, 0.15)';
-                            bookingStatusMsg.style.color = '#4ade80';
-                            bookingStatusMsg.style.border = '1px solid rgba(34, 197, 94, 0.3)';
-                            const bRef = result.booking && result.booking.bookingNumber ? ` (${result.booking.bookingNumber})` : '';
-                            bookingStatusMsg.textContent = `✅ Booking request created${bRef}! Redirecting to dashboard...`;
-
-                            setTimeout(() => {
-                                window.location.href = 'my-jobs.html';
-                            }, 1400);
-                        } else {
-                            isSubmitting = false;
-                            btnSubmitBooking.disabled = false;
-                            btnSubmitBooking.textContent = 'Confirm & Send Request';
-                            bookingStatusMsg.style.background = 'rgba(239, 68, 68, 0.15)';
-                            bookingStatusMsg.style.color = '#f87171';
-                            bookingStatusMsg.style.border = '1px solid rgba(239, 68, 68, 0.3)';
-                            bookingStatusMsg.textContent = `❌ ${result && result.message ? result.message : 'Booking failed. Database connection unavailable.'}`;
-                        }
-                    } catch (err) {
-                        isSubmitting = false;
-                        btnSubmitBooking.disabled = false;
-                        btnSubmitBooking.textContent = 'Confirm & Send Request';
-                        bookingStatusMsg.style.background = 'rgba(239, 68, 68, 0.15)';
-                        bookingStatusMsg.style.color = '#f87171';
-                        bookingStatusMsg.style.border = '1px solid rgba(239, 68, 68, 0.3)';
-                        bookingStatusMsg.textContent = '❌ An unexpected error occurred while submitting the booking.';
-                    }
-                };
-
-                bookingForm.addEventListener('submit', handleBookingSubmit);
-                btnSubmitBooking.addEventListener('click', (e) => {
-                    if (bookingForm.requestSubmit) {
-                        bookingForm.requestSubmit();
-                    } else {
-                        handleBookingSubmit(e);
-                    }
-                });
-
-                document.getElementById('btn-fav').addEventListener('click', () => {
-                    window.localHireApp.toggleFavorite(currentUser.id, worker.id);
-                    window.location.reload();
-                });
-            } else {
-                actionContainer.innerHTML = `
-                    <button class="btn btn-primary" onclick="window.location.href='auth.html'" style="width: 100%; padding: 1rem; font-size: 1.1rem;">
-                        Sign in to Hire
-                    </button>
-                `;
-            }
-
-            } catch (error) {
-                console.error('[Profile] Failed to render worker profile:', error);
-                container.innerHTML = `<div class="glass-card" style="text-align: center; padding: 4rem;"><h2>Unable to load profile</h2><p class="text-muted" style="margin-top: 0.75rem;">The worker profile data is incomplete or the server is unavailable.</p><a href="${backHref}" class="btn btn-primary" style="margin-top: 1rem;">${backLabel}</a></div>`;
-            }
-
+        // Favourites (existing client-side "saved workers" feature)
+        document.querySelectorAll('#btn-fav').forEach((btn) => {
+            const paint = () => { const fresh = LH.user(); const saved = fresh.favorites && fresh.favorites.includes(worker.id); btn.textContent = saved ? '♥ Saved' : '♡ Save professional'; btn.setAttribute('aria-pressed', String(!!saved)); };
+            paint();
+            btn.addEventListener('click', () => { window.localHireApp.toggleFavorite(u.id, worker.id); paint(); });
         });
+
+        // ── Reviews (real, from the API; hidden reviews are never returned) ──
+        (async () => {
+            const box = $('#reviews-root');
+            const stars = (n) => `${'★'.repeat(n)}${'☆'.repeat(5 - n)}`;
+            const card = (r) => `<article class="lh-review"><div style="display:flex;justify-content:space-between;gap:8px"><strong>${esc(r.reviewerName || 'Customer')}</strong><span class="lh-help">${r.createdAt ? esc(new Date(r.createdAt).toLocaleDateString('en-IN', { dateStyle: 'medium' })) : ''}</span></div>
+                <div class="lh-stars" role="img" aria-label="${Number(r.rating)} out of 5">${stars(Number(r.rating))}</div><p style="margin-top:4px;color:var(--lh-ink-2);white-space:pre-line">${esc(r.comment || '')}</p><span class="lh-help" style="font-size:11.5px">Verified booking</span></article>`;
+            try {
+                const first = await LH.data.reviews(worker.id, { limit: 5, page: 1 });
+                const sum = first.summary || { count: 0 };
+                if (!sum.count) {
+                    box.innerHTML = `<div style="text-align:center;padding:18px 0"><strong>No reviews yet</strong><p class="lh-help">Reviews appear here after customers rate completed jobs with ${esc(worker.name.split(' ')[0])}. No rating is shown until then.</p></div>`;
+                    return;
+                }
+                const avg = Number(sum.average);
+                const dist = [5, 4, 3, 2, 1].map((n) => [n, Number((sum.distribution || {})[n] || 0)]);
+                box.innerHTML = `<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+                    <div><div style="font-size:34px;font-weight:700;line-height:1">${avg.toFixed(1)}</div><div class="lh-stars" aria-hidden="true">${stars(Math.round(avg))}</div><div class="lh-help">${sum.count} ${sum.count === 1 ? 'review' : 'reviews'}</div></div>
+                    <div style="flex:1;min-width:180px">${dist.map(([n, c]) => `<div style="display:flex;align-items:center;gap:8px;font-size:12.5px"><span style="width:12px">${n}</span><div style="flex:1;height:6px;background:var(--lh-line);border-radius:3px"><div style="width:${(c / sum.count) * 100}%;height:100%;background:var(--lh-star);border-radius:3px"></div></div><span style="width:22px;color:var(--lh-muted)">${c}</span></div>`).join('')}</div></div>
+                    <div id="rev-list">${first.reviews.map(card).join('')}</div><div id="rev-more" style="text-align:center;margin-top:8px"></div>`;
+                let page = 1; const pages = first.pages || 1;
+                const more = $('#rev-more');
+                const paintMore = () => { more.innerHTML = page < pages ? '<button class="lh-btn lh-btn-ghost" type="button" id="rev-more-btn">Show more reviews</button>' : ''; const b = $('#rev-more-btn'); if (b) b.addEventListener('click', async () => { b.disabled = true; b.textContent = 'Loading...'; try { page += 1; const next = await LH.data.reviews(worker.id, { limit: 5, page }); $('#rev-list').insertAdjacentHTML('beforeend', next.reviews.map(card).join('')); paintMore(); } catch (e) { page -= 1; b.disabled = false; b.textContent = 'Could not load. Try again'; } }); };
+                paintMore();
+            } catch (e) { box.innerHTML = '<p class="lh-help">Reviews could not be loaded right now.</p>'; }
+        })();
+
+        // ── Booking request ───────────────────────────────────────────────────
+        if (!canBook) return;
+        const overlay = $('#book-overlay'); const sheet = $('#book-sheet');
+        const bk = { step: 1, description: '', date: '', slot: null, time: '', price: worker.startingPrice || '', addressMode: 'saved', addressId: '', addr: { label: 'Home', flat: '', street: '', landmark: '', city: '', postal: '' }, addresses: [], submitting: false, done: null };
+        const loc0 = LH.location.get();
+        if (loc0) bk.addr.city = loc0.city || '';
+
+        const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const pad = (n) => String(n).padStart(2, '0');
+        const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+        const fromMin = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+        const fmt12 = (t) => { const h = Number(t.slice(0, 2)); return `${h % 12 || 12}:${t.slice(3)} ${h < 12 ? 'AM' : 'PM'}`; };
+
+        // Time windows come from the worker's real working hours for the chosen weekday.
+        const slotsFor = (dateStr) => {
+            if (!dateStr) return { slots: [], closed: false };
+            const day = new Date(dateStr + 'T00:00:00').getDay();
+            const hrs = (worker.workingHours || []).find((h) => h.dayOfWeek === day);
+            if (!(worker.workingHours || []).length) return { slots: null, closed: false };      // no hours published: free time entry
+            if (!hrs) return { slots: [], closed: true, day };
+            const startMin = toMin(hrs.startTime); const endMin = toMin(hrs.endTime);
+            const out = [];
+            for (let s = startMin; s + 60 <= endMin; s += 120) {
+                const e = Math.min(s + 120, endMin);
+                out.push({ start: fromMin(s), end: fromMin(e), label: `${fmt12(fromMin(s))} – ${fmt12(fromMin(e))}` });
+            }
+            const isToday = dateStr === ymd(new Date());
+            const nowMin = new Date().getHours() * 60 + new Date().getMinutes() + 60;
+            return { slots: out.map((s) => ({ ...s, past: isToday && toMin(s.start) < nowMin })), closed: false, day };
+        };
+
+        const stepBar = () => `<div class="lh-steps" aria-hidden="true">${[1, 2, 3].map((n) => `<span class="${n <= bk.step ? 'on' : ''}"></span>`).join('')}</div>`;
+        const err = (id) => `<div class="lh-error" id="${id}" role="alert"></div>`;
+        const setErr = (id, msg) => { const el = $('#' + id, sheet); if (el) el.textContent = msg || ''; };
+
+        const render = () => {
+            if (bk.done) {
+                sheet.innerHTML = `<div style="text-align:center;padding:10px 0 4px">
+                    <div class="lh-cat-icon lh-tone-1" style="margin:0 auto 12px;width:64px;height:64px">${LH.icon('bookings')}</div>
+                    <h3 id="book-title" class="display" style="font-size:24px">Request sent</h3>
+                    <p class="lh-help" style="margin:8px auto 0;max-width:380px">${esc(worker.name)} will review your request and confirm. We'll notify you when they respond. Nothing has been charged.</p>
+                    <p style="margin-top:12px"><span class="lh-status REQUESTED">Awaiting ${esc(worker.name.split(' ')[0])}</span></p>
+                    <p class="lh-help" style="margin-top:8px">Booking reference <strong>${esc(bk.done.bookingNumber)}</strong></p>
+                    <div style="display:grid;gap:8px;margin-top:18px"><a class="lh-btn lh-btn-primary" href="my-jobs.html">View my bookings</a><a class="lh-btn lh-btn-ghost" href="customer-home.html">Back to home</a></div></div>`;
+                return;
+            }
+            const head = `<div class="lh-sheet-head"><h3 id="book-title">${['', 'Tell us what you need', 'Where should they go?', 'Review your request'][bk.step]}</h3><button class="lh-icon-btn" type="button" data-close aria-label="Close">${LH.icon('close')}</button></div>${stepBar()}`;
+            if (bk.step === 1) {
+                const info = slotsFor(bk.date);
+                let timeField;
+                if (!bk.date) timeField = '<p class="lh-help">Choose a date to see available times.</p>';
+                else if (info.slots === null) timeField = `<input class="lh-input" type="time" id="b-time" value="${esc(bk.time || '10:00')}" aria-describedby="e-time">`;
+                else if (info.closed) timeField = `<div class="lh-alert warn">${esc(worker.name.split(' ')[0])} doesn't usually work on ${LH.dayName[info.day]}s. Please choose another date.</div>`;
+                else if (!info.slots.some((s) => !s.past)) timeField = '<div class="lh-alert warn">No time windows are left today. Please choose another date.</div>';
+                else timeField = `<div class="lh-slots" role="group" aria-label="Time windows">${info.slots.map((s, i) => `<button type="button" class="lh-slot" data-slot="${i}" aria-pressed="${bk.slot && bk.slot.start === s.start}" ${s.past ? 'disabled' : ''}>${esc(s.label)}</button>`).join('')}</div>`;
+                const min = new Date(); const max = new Date(Date.now() + 90 * 86400000);
+                sheet.innerHTML = `${head}
+                    <div class="lh-field" style="margin-top:0"><label for="b-desc">Describe the problem or job</label>
+                        <textarea class="lh-textarea" id="b-desc" maxlength="1000" placeholder="e.g. The kitchen tap has been leaking under the sink since yesterday." aria-describedby="e-desc">${esc(bk.description)}</textarea>
+                        <div class="lh-help"><span id="desc-n">${bk.description.length}</span>/1000 · at least 10 characters</div>${err('e-desc')}</div>
+                    <div class="lh-field"><label for="b-date">Preferred date</label><input class="lh-input" type="date" id="b-date" min="${ymd(min)}" max="${ymd(max)}" value="${esc(bk.date)}" aria-describedby="e-date">${err('e-date')}</div>
+                    <div class="lh-field"><span class="lh-label">Preferred time</span>${timeField}${err('e-time')}</div>
+                    <div class="lh-field"><label for="b-price">Your proposed price (₹)</label><input class="lh-input" type="number" id="b-price" min="50" step="10" value="${esc(bk.price)}" inputmode="numeric" aria-describedby="e-price">
+                        <div class="lh-help">${worker.startingPrice !== null ? `Prefilled from ${esc(worker.name.split(' ')[0])}'s listed ${worker.priceUnit === 'visit' ? 'visit charge' : 'hourly rate'}. ` : ''}The final amount is agreed with the professional.</div>${err('e-price')}</div>
+                    <button class="lh-btn lh-btn-primary lh-btn-block" type="button" id="b-next" style="margin-top:18px">Continue</button>`;
+                const d = $('#b-desc', sheet); d.addEventListener('input', () => { bk.description = d.value; $('#desc-n', sheet).textContent = d.value.length; });
+                $('#b-date', sheet).addEventListener('change', (e) => { bk.date = e.target.value; bk.slot = null; render(); $('#b-date', sheet).focus(); });
+                const t = $('#b-time', sheet); if (t) t.addEventListener('input', () => { bk.time = t.value; });
+                $('#b-price', sheet).addEventListener('input', (e) => { bk.price = e.target.value; });
+                sheet.querySelectorAll('[data-slot]').forEach((b) => b.addEventListener('click', () => { bk.slot = slotsFor(bk.date).slots[Number(b.dataset.slot)]; render(); const again = sheet.querySelector(`[data-slot="${b.dataset.slot}"]`); if (again) again.focus(); }));
+                $('#b-next', sheet).addEventListener('click', () => {
+                    let ok = true;
+                    ['e-desc', 'e-date', 'e-time', 'e-price'].forEach((id) => setErr(id, ''));
+                    if (bk.description.trim().length < 10) { setErr('e-desc', 'Please describe the job in at least 10 characters.'); ok = false; }
+                    if (!bk.date) { setErr('e-date', 'Choose a date.'); ok = false; }
+                    const info2 = slotsFor(bk.date);
+                    if (bk.date && info2.slots === null) { if (!bk.time) { setErr('e-time', 'Choose a time.'); ok = false; } }
+                    else if (bk.date && (info2.closed || !bk.slot)) { setErr('e-time', info2.closed ? 'Pick a day the professional works.' : 'Choose a time window.'); ok = false; }
+                    if (!(Number(bk.price) >= 50)) { setErr('e-price', 'Enter a price of at least ₹50.'); ok = false; }
+                    if (ok) { bk.step = 2; render(); loadAddresses(); }
+                });
+            } else if (bk.step === 2) {
+                const cards = bk.addresses.map((a) => `<label class="lh-radio-card"><input type="radio" name="addr" value="${esc(a.id)}" ${bk.addressMode === 'saved' && bk.addressId === a.id ? 'checked' : ''}><span><strong>${esc(a.label)}</strong><br>${esc([a.flatNumber, a.street, a.landmark, a.city, a.postalCode].filter(Boolean).join(', '))}</span></label>`).join('');
+                const a = bk.addr;
+                sheet.innerHTML = `${head}
+                    <div id="addr-list">${bk.addresses.length ? cards : ''}</div>
+                    <label class="lh-radio-card"><input type="radio" name="addr" value="__new" ${bk.addressMode === 'new' ? 'checked' : ''}><span><strong>${bk.addresses.length ? 'Use a different address' : 'Enter the service address'}</strong></span></label>
+                    <div id="new-addr" ${bk.addressMode === 'new' ? '' : 'hidden'}>
+                        <div class="lh-field"><label for="a-flat">House / flat no.</label><input class="lh-input" id="a-flat" value="${esc(a.flat)}" autocomplete="address-line2"></div>
+                        <div class="lh-field"><label for="a-street">Street / area</label><input class="lh-input" id="a-street" value="${esc(a.street)}" autocomplete="address-line1" aria-describedby="e-street">${err('e-street')}</div>
+                        <div class="lh-field"><label for="a-landmark">Landmark (optional)</label><input class="lh-input" id="a-landmark" value="${esc(a.landmark)}"></div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                            <div class="lh-field"><label for="a-city">City</label><input class="lh-input" id="a-city" value="${esc(a.city)}" autocomplete="address-level2" aria-describedby="e-city">${err('e-city')}</div>
+                            <div class="lh-field"><label for="a-postal">PIN code</label><input class="lh-input" id="a-postal" value="${esc(a.postal)}" inputmode="numeric" autocomplete="postal-code" aria-describedby="e-postal">${err('e-postal')}</div></div>
+                        <div class="lh-field"><label for="a-label">Save as</label><select class="lh-select" id="a-label"><option>Home</option><option>Office</option><option>Other</option></select></div></div>
+                    ${err('e-addr')}
+                    <div style="display:flex;gap:10px;margin-top:18px"><button class="lh-btn lh-btn-ghost" type="button" id="b-back">Back</button><button class="lh-btn lh-btn-primary" style="flex:1" type="button" id="b-next">Review request</button></div>`;
+                const sync = () => { const v = (sheet.querySelector('input[name="addr"]:checked') || {}).value; bk.addressMode = v === '__new' ? 'new' : 'saved'; if (v && v !== '__new') bk.addressId = v; $('#new-addr', sheet).hidden = bk.addressMode !== 'new'; };
+                sheet.querySelectorAll('input[name="addr"]').forEach((r) => r.addEventListener('change', sync));
+                ['flat', 'street', 'landmark', 'city', 'postal'].forEach((k) => { const el = $('#a-' + k, sheet); if (el) el.addEventListener('input', () => { bk.addr[k] = el.value; }); });
+                $('#a-label', sheet).value = a.label; $('#a-label', sheet).addEventListener('change', (e) => { bk.addr.label = e.target.value; });
+                $('#b-back', sheet).addEventListener('click', () => { bk.step = 1; render(); });
+                $('#b-next', sheet).addEventListener('click', () => {
+                    ['e-street', 'e-city', 'e-postal', 'e-addr'].forEach((id) => setErr(id, ''));
+                    if (bk.addressMode === 'saved' && !bk.addressId) { setErr('e-addr', 'Choose an address or enter a new one.'); return; }
+                    if (bk.addressMode === 'new') {
+                        let ok = true;
+                        if (bk.addr.street.trim().length < 3) { setErr('e-street', 'Enter the street or area.'); ok = false; }
+                        if (bk.addr.city.trim().length < 2) { setErr('e-city', 'Enter the city.'); ok = false; }
+                        if (!/^[0-9A-Za-z -]{4,10}$/.test(bk.addr.postal.trim())) { setErr('e-postal', 'Enter a valid PIN code.'); ok = false; }
+                        if (!ok) return;
+                    }
+                    bk.step = 3; render();
+                });
+            } else {
+                const addr = bk.addressMode === 'new' ? [bk.addr.flat, bk.addr.street, bk.addr.landmark, bk.addr.city, bk.addr.postal].filter(Boolean).join(', ')
+                    : (() => { const a = bk.addresses.find((x) => x.id === bk.addressId) || {}; return [a.flatNumber, a.street, a.landmark, a.city, a.postalCode].filter(Boolean).join(', '); })();
+                const when = bk.slot ? bk.slot.label : fmt12(bk.time || '10:00');
+                sheet.innerHTML = `${head}
+                    <dl class="lh-summary">
+                        <dt>Professional</dt><dd><strong>${esc(worker.name)}</strong> · ${esc(worker.category)}</dd>
+                        <dt>Job</dt><dd>${esc(bk.description.trim())}</dd>
+                        <dt>Date</dt><dd>${esc(new Date(bk.date + 'T00:00:00').toLocaleDateString('en-IN', { dateStyle: 'full' }))}</dd>
+                        <dt>Time</dt><dd>${esc(when)}</dd>
+                        <dt>Location</dt><dd>${esc(addr)}</dd>
+                        <dt>Proposed price</dt><dd><strong>${LH.money(bk.price)}</strong></dd></dl>
+                    <div class="lh-alert" style="margin-top:14px;font-size:13px">This is a <strong>request</strong>. ${esc(worker.name.split(' ')[0])} has to confirm it, and <strong>no payment is taken now</strong>. You can track it in My bookings.</div>
+                    <div id="submit-err" class="lh-alert err" role="alert" style="display:none;margin-top:12px"></div>
+                    <div style="display:flex;gap:10px;margin-top:18px"><button class="lh-btn lh-btn-ghost" type="button" id="b-back">Back</button><button class="lh-btn lh-btn-primary" style="flex:1" type="button" id="b-submit">Send booking request</button></div>`;
+                $('#b-back', sheet).addEventListener('click', () => { bk.step = 2; render(); });
+                $('#b-submit', sheet).addEventListener('click', submit);
+            }
+            const first = sheet.querySelector('textarea, input:not([type=radio]), button.lh-btn-primary'); if (first && bk.step === 1 && !bk.description) first.focus();
+        };
+
+        const loadAddresses = async () => {
+            if (bk.addresses.length || bk.addressesLoaded) return;
+            bk.addressesLoaded = true;
+            try {
+                bk.addresses = (await LH.data.addresses()).addresses || [];
+                const def = bk.addresses.find((a) => a.isDefault) || bk.addresses[0];
+                bk.addressMode = def ? 'saved' : 'new'; bk.addressId = def ? def.id : '';
+            } catch (e) { bk.addressMode = 'new'; }
+            if (bk.step === 2) render();
+        };
+
+        const submit = async () => {
+            if (bk.submitting) return;
+            bk.submitting = true;
+            const btn = $('#b-submit', sheet); btn.disabled = true; btn.textContent = 'Sending…';
+            const box = $('#submit-err', sheet); box.style.display = 'none';
+            try {
+                let addressId = bk.addressId;
+                if (bk.addressMode === 'new') {
+                    const l = LH.location.get();
+                    const created = await LH.data.createAddress({ label: bk.addr.label, flatNumber: bk.addr.flat, street: bk.addr.street.trim(), landmark: bk.addr.landmark, city: bk.addr.city.trim(), postalCode: bk.addr.postal.trim(), ...(l && l.city && l.city.toLowerCase() === bk.addr.city.trim().toLowerCase() ? { latitude: l.lat, longitude: l.lng } : {}), isDefault: bk.addresses.length === 0 });
+                    addressId = (created.address || created).id;
+                }
+                const start = bk.slot ? bk.slot.start : (bk.time || '10:00');
+                const res = await LH.data.createBooking({
+                    workerId: worker.id, scheduledAt: new Date(`${bk.date}T${start}:00`).toISOString(), timeSlot: bk.slot ? bk.slot.label : fmt12(start),
+                    agreedPrice: Number(bk.price), problemDescription: bk.description.trim(), addressId
+                });
+                bk.done = res.booking;
+                render();
+            } catch (e) {
+                const msg = e.data && e.data.code === 'WORKER_NOT_VERIFIED' ? 'This professional is no longer available for new bookings.' : (e.message || 'We could not send your request.');
+                box.textContent = msg; box.style.display = 'block';
+                btn.disabled = false; btn.textContent = 'Send booking request';
+            } finally { bk.submitting = false; }
+        };
+
+        const open = () => { bk.step = 1; bk.done = null; render(); overlay.classList.add('open'); };
+        const close = () => overlay.classList.remove('open');
+        document.querySelectorAll('[data-book]').forEach((b) => b.addEventListener('click', open));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-close]')) close(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+        if (params.get('book') === '1') open();
+    })();
     </script>
 </body>
 </html>

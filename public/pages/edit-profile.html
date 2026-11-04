@@ -144,6 +144,8 @@
     <script>
         document.addEventListener('DOMContentLoaded', async () => {
             renderNavbar('navbar-container', 'pages');
+            // Categories come from the database (one source), the static options are only a fallback
+            await window.localHireCategories.fill(document.getElementById('category'));
 
             const user = window.localHireApp.getCurrentUser();
             
@@ -387,8 +389,6 @@
                     skills: document.getElementById('skills').value.split(',').map(s => s.trim()).filter(s => s),
                     bio: document.getElementById('bio').value,
                     availability: document.getElementById('availability').value,
-                    rating: user.rating || 5.0,
-                    reviewsCount: user.reviewsCount || 1,
                     location: 'Nearby'
                 };
 
