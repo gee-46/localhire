@@ -87,6 +87,18 @@ const blockedUnapprovedStatus = evaluateBookingStatusTransition({
   bookingWorkerId: 'worker-1',
   isEscrowHeld: true
 });
-assert.equal(blockedUnapprovedStatus.allowed, false, 'The unapproved waiting-for-customer-confirmation enum must stay unavailable until the migration is approved');
+assert.equal(blockedUnapprovedStatus.allowed, true, 'A worker finishing the job must request customer confirmation instead of completing it');
+
+const blockedWorkerComplete = evaluateBookingStatusTransition({
+  currentUserId: 'worker-1', actorRole: 'Worker', isCustomer: false, isWorker: true, isAdmin: false,
+  currentStatus: 'IN_PROGRESS', requestedStatus: 'COMPLETED', bookingCustomerId: 'customer-1', bookingWorkerId: 'worker-1', isEscrowHeld: true
+});
+assert.equal(blockedWorkerComplete.allowed, false, 'A worker must never be able to complete a booking (and so trigger earnings) on their own');
+
+const blockedAdminComplete = evaluateBookingStatusTransition({
+  currentUserId: 'admin-1', actorRole: 'Admin', isCustomer: false, isWorker: false, isAdmin: true,
+  currentStatus: 'IN_PROGRESS', requestedStatus: 'COMPLETED', bookingCustomerId: 'customer-1', bookingWorkerId: 'worker-1', isEscrowHeld: true
+});
+assert.equal(blockedAdminComplete.allowed, false, 'Admins resolve through dispute resolution, not by force-completing a booking');
 
 console.log('Stage 1 security checks passed');

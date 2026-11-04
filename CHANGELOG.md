@@ -56,3 +56,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-04T13:40:25+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Implemented worker job-acceptance eligibility rules and public avatar image processing utilities.
+
+### [2026-11-04] test(worker): add worker gating and profile authorization tests
+- **Date:** 2026-11-04T18:50:44+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added automated tests verifying that unverified workers cannot accept jobs, and validating strict profile photo upload constraints.
