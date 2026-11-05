@@ -66,3 +66,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-05T10:48:33+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added migration for worker portfolio items, sample work images, and booking customer instruction notes.
+
+### [2026-11-05] feat(marketplace): implement marketplace controller and category routing
+- **Date:** 2026-11-05T14:22:15+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Created dedicated marketplace discovery endpoints supporting category filtering, spatial proximity sorting, and worker listing summaries.
