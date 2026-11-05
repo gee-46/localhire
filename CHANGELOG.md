@@ -61,3 +61,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-04T18:50:44+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added automated tests verifying that unverified workers cannot accept jobs, and validating strict profile photo upload constraints.
+
+### [2026-11-05] feat(db): add marketplace portfolio and booking notes migration
+- **Date:** 2026-11-05T10:48:33+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added migration for worker portfolio items, sample work images, and booking customer instruction notes.
