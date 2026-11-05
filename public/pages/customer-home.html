@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalHire | Trusted local professionals near you</title>
+    <meta name="description" content="Book identity-verified local professionals: electricians, plumbers, tutors, cleaners and more.">
+    <meta name="theme-color" content="#5b3df5">
+    <link rel="stylesheet" href="../css/marketplace.css">
+    <link rel="stylesheet" href="../css/comm.css">
+</head>
+<body class="lh">
+    <div id="lh-header"></div>
+
+    <main id="main" class="lh-main">
+        <section class="lh-hero" aria-labelledby="hero-title">
+            <div class="lh-container lh-hero-inner">
+                <h1 id="hero-title" class="display">Trusted help for your home, on your schedule.</h1>
+                <p class="lead">Book identity-verified local professionals who are available near you right now.</p>
+                <div class="lh-search">
+                    <form id="search-form" role="search" autocomplete="off">
+                        <svg class="lh-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                        <label class="lh-sr" for="search-input">Search services, professionals or categories</label>
+                        <input id="search-input" type="search" placeholder="What service do you need today?" maxlength="60" aria-controls="suggest">
+                        <button class="lh-btn lh-btn-primary" type="submit">Search</button>
+                    </form>
+                    <div class="lh-suggest" id="suggest" role="listbox" aria-label="Search suggestions"></div>
+                </div>
+                <div class="lh-chips" id="hero-chips" aria-label="Popular categories"></div>
+            </div>
+        </section>
+
+        <div class="lh-container">
+            <div id="loc-banner" class="lh-pull-up"></div>
+
+            <section class="lh-section" id="sec-active" hidden aria-labelledby="h-active">
+                <div class="lh-section-head"><h2 id="h-active">Your active bookings</h2><a class="lh-link" href="my-jobs.html">View all</a></div>
+                <div class="lh-hscroll" id="active-list"></div>
+            </section>
+
+            <section class="lh-section" id="sec-cats" aria-labelledby="h-cats">
+                <div class="lh-section-head">
+                    <div><h2 id="h-cats">Browse by service</h2><p id="cats-note">Every category, straight from our service directory.</p></div>
+                    <button class="lh-link" type="button" id="cats-toggle" hidden>View all</button>
+                </div>
+                <div class="lh-cat-grid" id="cat-grid"></div>
+            </section>
+
+            <section class="lh-section" id="sec-nearby" aria-labelledby="h-nearby">
+                <div class="lh-section-head">
+                    <div><h2 id="h-nearby">Available professionals near you</h2><p id="nearby-note"></p></div>
+                    <a class="lh-link" id="nearby-all" href="category.html">See all</a>
+                </div>
+                <div class="lh-grid cols-3" id="nearby-list"></div>
+            </section>
+
+            <section class="lh-section" id="sec-top" hidden aria-labelledby="h-top">
+                <div class="lh-section-head"><div><h2 id="h-top">Top-rated professionals</h2><p>Ranked by genuine customer reviews.</p></div>
+                    <a class="lh-link" href="category.html?sort=rating&amp;reviewedOnly=true">See all</a></div>
+                <div class="lh-grid cols-3" id="top-list"></div>
+            </section>
+
+            <section class="lh-section" id="sec-services" hidden aria-labelledby="h-services">
+                <div class="lh-section-head"><div><h2 id="h-services">Popular services</h2><p id="services-note"></p></div></div>
+                <div class="lh-hscroll" id="services-list"></div>
+            </section>
+
+            <section class="lh-section" id="sec-again" hidden aria-labelledby="h-again">
+                <div class="lh-section-head"><div><h2 id="h-again">Book again</h2><p>Services you have used before.</p></div></div>
+                <div class="lh-cat-grid" id="again-list"></div>
+            </section>
+
+            <section class="lh-section" id="sec-recent" hidden aria-labelledby="h-recent">
+                <div class="lh-section-head"><h2 id="h-recent">Recently viewed</h2></div>
+                <div class="lh-grid cols-3" id="recent-list"></div>
+            </section>
+
+            <p class="lh-footer">Professionals shown here have passed LocalHire identity verification. Ratings come only from customers who completed a booking.</p>
+        </div>
+    </main>
+
+    <div id="lh-bottom"></div>
+
+    <script src="../js/data.js"></script>
+    <script src="../js/geo.js"></script>
+    <script src="../js/api.js"></script>
+    <script src="../js/app.js"></script>
+    <script src="../js/marketplace.js"></script>
+    <script src="../js/notifications.js"></script>
+    <script>
+    (async () => {
+        const g = LH.guard();
+        if (g.redirected) return;
+        if (!g.user) { window.location.replace('../index.html'); return; }
+
+        const $ = (s) => document.querySelector(s);
+        const esc = LH.esc;
+        LH.renderHeader($('#lh-header'), { active: 'home' });
+        LH.renderBottomNav($('#lh-bottom'), 'home');
+        LH.attachSearch({ form: $('#search-form'), input: $('#search-input'), box: $('#suggest') });
+
+        const retry = (fn) => `<button class="lh-btn lh-btn-ghost" type="button" data-retry>Try again</button>`;
+        const show = (id, on) => { $(id).hidden = !on; };
+        let catsExpanded = false;
+        let home = null;
+
+        // ── Location ──────────────────────────────────────────────────────────
+        const bannerBox = $('#loc-banner');
+        const locBanner = (state) => {
+            const messages = {
+                none: ['warn', 'Set your location to see professionals near you.', 'We use it only to find nearby professionals and estimate distance.'],
+                denied: ['warn', 'Location access is blocked in your browser.', 'You can still choose your area manually, or allow location in your browser settings.'],
+                unavailable: ['warn', 'We could not detect your location.', 'Search for your area instead.']
+            };
+            if (!state) { bannerBox.innerHTML = ''; return; }
+            const [kind, title, text] = messages[state];
+            bannerBox.innerHTML = `<div class="lh-card" style="padding:16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+                <div><strong>${esc(title)}</strong><div class="lh-help">${esc(text)}</div></div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    ${state === 'denied' ? '' : '<button class="lh-btn lh-btn-primary lh-btn-sm" type="button" id="b-gps">Use my location</button>'}
+                    <button class="lh-btn lh-btn-ghost lh-btn-sm" type="button" id="b-manual">Choose area manually</button></div></div>`;
+            const gps = $('#b-gps'); if (gps) gps.addEventListener('click', () => LH.openLocationModal());
+            $('#b-manual').addEventListener('click', () => LH.openLocationModal());
+        };
+
+        const askForLocationOnce = async () => {
+            if (sessionStorage.getItem('lh_loc_asked')) return;
+            sessionStorage.setItem('lh_loc_asked', '1');
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    const status = await navigator.permissions.query({ name: 'geolocation' });
+                    if (status.state === 'denied') { locBanner('denied'); return; }
+                }
+                const pos = await LH.location.detect();
+                let place;
+                try { place = await LH.location.reverse(pos.lat, pos.lng); }
+                catch (e) { place = { lat: pos.lat, lng: pos.lng, locality: '', city: '', label: 'Current location' }; }
+                const r = await LH.location.set(place);
+                LH.toast(r.saved ? `Location set to ${place.label} and saved` : `Location set to ${place.label}`);
+            } catch (err) {
+                locBanner(err.code === 'denied' ? 'denied' : 'unavailable');
+            }
+        };
+
+        // ── Sections ──────────────────────────────────────────────────────────
+        const locParams = () => { const l = LH.location.get(); return l ? { lat: l.lat, lng: l.lng } : null; };
+
+        const renderCategories = () => {
+            const grid = $('#cat-grid');
+            if (!home) return;
+            const loc = LH.location.get();
+            $('#cats-note').textContent = loc
+                ? `Numbers show verified professionals available now within 20 km of ${loc.label || 'you'}.`
+                : 'Numbers show verified professionals available right now. Set your location for nearby counts.';
+            const list = catsExpanded ? home.categories : home.categories.slice(0, 10);
+            grid.innerHTML = list.map((c) => LH.categoryTile(c, { count: c.availableWorkers })).join('');
+            const toggle = $('#cats-toggle');
+            toggle.hidden = home.categories.length <= 10;
+            toggle.textContent = catsExpanded ? 'Show fewer' : `View all ${home.categories.length}`;
+            // Quick chips in the hero come from the same directory
+            $('#hero-chips').innerHTML = home.categories.slice(0, 5).map((c) => `<a class="lh-chip" href="category.html?category=${encodeURIComponent(c.slug)}">${esc(c.name)}</a>`).join('');
+        };
+        $('#cats-toggle').addEventListener('click', () => { catsExpanded = !catsExpanded; renderCategories(); });
+
+        const loadHome = async () => {
+            $('#cat-grid').innerHTML = LH.skeletonTiles(10);
+            try {
+                const l = locParams();
+                home = await LH.data.home(l ? { ...l, radiusKm: 20 } : null);
+                renderCategories();
+                // services
+                if (home.services.length) {
+                    show('#sec-services', true);
+                    $('#h-services').textContent = home.servicesSource === 'popular' ? 'Popular services' : 'Services you can book';
+                    $('#services-note').textContent = home.servicesSource === 'popular' ? 'Most booked on LocalHire.' : 'From the LocalHire service catalogue.';
+                    $('#services-list').innerHTML = home.services.map((s) => `<a class="lh-card lh-bk" href="category.html?category=${encodeURIComponent(s.category.slug)}&q=${encodeURIComponent(s.title)}">
+                        <span class="lh-status">${esc(s.category.name)}</span><strong>${esc(s.title)}</strong>
+                        <span class="lh-help">${s.bookings ? `${s.bookings} ${s.bookings === 1 ? 'booking' : 'bookings'}` : 'Find a professional'}</span></a>`).join('');
+                } else show('#sec-services', false);
+                // book again
+                if (home.bookAgain.length) {
+                    show('#sec-again', true);
+                    const slugOf = new Map(home.categories.map((c) => [c.id, c]));
+                    $('#again-list').innerHTML = home.bookAgain.map((b) => LH.categoryTile(slugOf.get(b.category.id) || b.category, { count: b.availableWorkers })).join('');
+                } else show('#sec-again', false);
+            } catch (e) {
+                $('#cat-grid').innerHTML = `<div style="grid-column:1/-1">${LH.stateBox({ icon: 'grid', error: true, title: 'Categories could not be loaded', text: e.message || 'Please check your connection.', action: retry() })}</div>`;
+                $('#cat-grid').querySelector('[data-retry]').addEventListener('click', loadHome);
+            }
+        };
+
+        const loadNearby = async () => {
+            const list = $('#nearby-list'); const loc = LH.location.get();
+            list.innerHTML = LH.skeletonCards(6);
+            $('#h-nearby').textContent = loc ? 'Available professionals near you' : 'Available professionals';
+            $('#nearby-note').textContent = loc ? `Verified and available now within 20 km of ${loc.label || 'you'}, nearest first.` : 'Verified professionals who are available right now. Set your location to see distance.';
+            try {
+                const params = loc ? { lat: loc.lat, lng: loc.lng, radiusKm: 20, sort: 'nearest', limit: 6 } : { sort: 'rating', limit: 6 };
+                const res = await LH.data.workers(params);
+                $('#nearby-all').href = 'category.html' + (loc ? '?sort=nearest' : '');
+                if (!res.workers.length) {
+                    list.innerHTML = `<div style="grid-column:1/-1">${LH.stateBox({ icon: 'users',
+                        title: loc ? 'No professionals are available near you right now' : 'No professionals are available right now',
+                        text: loc ? 'Verified professionals appear here as soon as they go online in your area. Try browsing a category or checking back soon.' : 'Verified professionals appear here as soon as they go online.',
+                        action: '<a class="lh-btn lh-btn-primary" href="category.html">Browse all services</a>' })}</div>`;
+                    return;
+                }
+                list.innerHTML = res.workers.map(LH.workerCard).join('');
+            } catch (e) {
+                list.innerHTML = `<div style="grid-column:1/-1">${LH.stateBox({ icon: 'users', error: true, title: 'Professionals could not be loaded', text: e.message, action: retry() })}</div>`;
+                list.querySelector('[data-retry]').addEventListener('click', loadNearby);
+            }
+        };
+
+        const loadTop = async () => {
+            try {
+                const l = locParams();
+                const res = await LH.data.workers({ reviewedOnly: true, sort: 'rating', limit: 3, ...(l ? { ...l, radiusKm: 50 } : {}) });
+                show('#sec-top', res.workers.length > 0);
+                $('#top-list').innerHTML = res.workers.map(LH.workerCard).join('');
+            } catch (e) { show('#sec-top', false); }
+        };
+
+        const STATUS = { REQUESTED: 'Awaiting worker', CONFIRMED: 'Confirmed', DISPATCHED: 'On the way', IN_PROGRESS: 'In progress', AWAITING_CUSTOMER_CONFIRMATION: 'Awaiting your confirmation' };
+        const loadActive = async () => {
+            try {
+                const res = await LH.data.bookings();
+                const active = (res.bookings || []).filter((b) => STATUS[b.status]).slice(0, 8);
+                show('#sec-active', active.length > 0);
+                $('#active-list').innerHTML = active.map((b) => `<a class="lh-card lh-bk" href="my-jobs.html">
+                    <span class="lh-status ${esc(b.status)}">${esc(STATUS[b.status])}</span>
+                    <strong>${esc((b.worker && b.worker.name) || 'Professional')}</strong>
+                    <span class="lh-help">${esc(new Date(b.scheduledAt).toLocaleDateString('en-IN', { dateStyle: 'medium' }))}${b.timeSlot && b.timeSlot !== 'Flexible' ? ' · ' + esc(b.timeSlot) : ''}</span>
+                    <span class="lh-help">${esc(b.bookingNumber)}</span></a>`).join('');
+            } catch (e) { show('#sec-active', false); }
+        };
+
+        const loadRecent = async () => {
+            const ids = LH.recent.ids();
+            if (!ids.length) { show('#sec-recent', false); return; }
+            // each profile is re-checked on the server: anyone no longer verified simply drops out
+            const found = (await Promise.all(ids.slice(0, 6).map((id) => LH.data.worker(id).then((r) => r.worker).catch(() => null)))).filter((w) => w && w.isVerified);
+            show('#sec-recent', found.length > 0);
+            $('#recent-list').innerHTML = found.map(LH.workerCard).join('');
+        };
+
+        const loadAll = () => Promise.all([loadHome(), loadNearby(), loadTop()]);
+
+        await LH.location.restore();
+        LH.location.onChange(() => { locBanner(null); loadAll(); });
+        if (!LH.location.get()) { locBanner('none'); askForLocationOnce(); }
+        loadAll();
+        loadActive();
+        loadRecent();
+    })();
+    </script>
+</body>
+</html>

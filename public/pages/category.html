@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Find professionals | LocalHire</title>
+    <meta name="theme-color" content="#5b3df5">
+    <link rel="stylesheet" href="../css/marketplace.css">
+    <link rel="stylesheet" href="../css/comm.css">
+</head>
+<body class="lh">
+    <div id="lh-header"></div>
+
+    <main id="main" class="lh-main">
+        <div class="lh-container" style="padding-top:20px">
+            <nav aria-label="Breadcrumb" class="lh-help"><a class="lh-link" href="customer-home.html" id="crumb-home">Home</a> / <span id="crumb-current">Services</span></nav>
+            <div style="margin-top:6px">
+                <h1 class="display" id="page-title" style="font-size:30px;line-height:1.2">Find a professional</h1>
+                <p class="lh-help" id="page-sub" style="font-size:14px"></p>
+            </div>
+
+            <div class="lh-filterbar" id="cat-chips" role="group" aria-label="Service categories" style="margin-top:14px"></div>
+
+            <form id="filters" class="lh-filterbar" aria-label="Filters and sorting">
+                <label class="lh-sr" for="f-sort">Sort by</label>
+                <select class="lh-select" id="f-sort">
+                    <option value="nearest">Sort: Nearest</option>
+                    <option value="rating">Sort: Highest rated</option>
+                    <option value="price">Sort: Lowest price</option>
+                    <option value="experience">Sort: Most experienced</option>
+                </select>
+                <label class="lh-sr" for="f-radius">Distance</label>
+                <select class="lh-select" id="f-radius">
+                    <option value="">Distance: within 20 km</option>
+                    <option value="5">Within 5 km</option><option value="10">Within 10 km</option>
+                    <option value="20">Within 20 km</option><option value="50">Within 50 km</option>
+                </select>
+                <label class="lh-sr" for="f-rating">Minimum rating</label>
+                <select class="lh-select" id="f-rating">
+                    <option value="">Rating: any</option><option value="3">3.0 &amp; up</option><option value="4">4.0 &amp; up</option><option value="4.5">4.5 &amp; up</option>
+                </select>
+                <label class="lh-sr" for="f-price">Maximum price</label>
+                <select class="lh-select" id="f-price">
+                    <option value="">Price: any</option><option value="300">Up to ₹300</option><option value="500">Up to ₹500</option>
+                    <option value="1000">Up to ₹1,000</option><option value="2000">Up to ₹2,000</option>
+                </select>
+                <label class="lh-sr" for="f-exp">Minimum experience</label>
+                <select class="lh-select" id="f-exp">
+                    <option value="">Experience: any</option><option value="2">2+ years</option><option value="5">5+ years</option><option value="10">10+ years</option>
+                </select>
+                <label class="lh-sr" for="f-avail">Working hours</label>
+                <select class="lh-select" id="f-avail">
+                    <option value="any">Working hours: any</option><option value="today">Works today</option><option value="now">Open right now</option>
+                </select>
+            </form>
+
+            <div id="loc-note"></div>
+            <div class="lh-section-head" style="margin:6px 0 12px">
+                <p id="result-count" role="status" aria-live="polite" style="font-weight:600;font-size:14px"></p>
+                <button type="button" class="lh-link" id="clear-filters" hidden>Clear all filters</button>
+            </div>
+            <div class="lh-grid cols-3" id="results"></div>
+            <div style="text-align:center;margin:20px 0"><button class="lh-btn lh-btn-ghost" id="load-more" type="button" hidden>Show more professionals</button></div>
+            <p class="lh-footer">Only identity-verified professionals who are available right now are listed. <a class="lh-link" href="search.html" id="map-link">Prefer a map? Open map search</a>.</p>
+        </div>
+    </main>
+
+    <div id="lh-bottom"></div>
+
+    <script src="../js/data.js"></script>
+    <script src="../js/geo.js"></script>
+    <script src="../js/api.js"></script>
+    <script src="../js/app.js"></script>
+    <script src="../js/marketplace.js"></script>
+    <script src="../js/notifications.js"></script>
+    <script>
+    (async () => {
+        const g = LH.guard();
+        if (g.redirected) return;
+        const $ = (s) => document.querySelector(s);
+        const esc = LH.esc;
+        LH.renderHeader($('#lh-header'), { active: 'browse' });
+        LH.renderBottomNav($('#lh-bottom'), 'browse');
+        if (!g.user) $('#crumb-home').href = '../index.html';
+
+        const PAGE_SIZE = 12;
+        const url = new URLSearchParams(window.location.search);
+        const state = {
+            category: url.get('category') || '', q: url.get('q') || '', sort: url.get('sort') || '',
+            radiusKm: url.get('radiusKm') || '', minRating: url.get('minRating') || '', maxPrice: url.get('maxPrice') || '',
+            minExperience: url.get('minExperience') || '', availability: url.get('availability') || 'any',
+            reviewedOnly: url.get('reviewedOnly') || ''
+        };
+        let page = 1; let loaded = []; let total = 0; let seq = 0;
+        let categories = [];
+
+        const sortSel = $('#f-sort'); const radiusSel = $('#f-radius');
+        const controls = { sort: sortSel, radiusKm: radiusSel, minRating: $('#f-rating'), maxPrice: $('#f-price'), minExperience: $('#f-exp'), availability: $('#f-avail') };
+
+        const hasLocation = () => !!LH.location.get();
+
+        const syncControls = () => {
+            const loc = hasLocation();
+            sortSel.querySelector('[value="nearest"]').disabled = !loc;
+            radiusSel.disabled = !loc;
+            if (!loc && state.sort === 'nearest') state.sort = '';
+            if (!state.sort) state.sort = loc ? 'nearest' : 'rating';
+            Object.entries(controls).forEach(([key, el]) => { el.value = state[key] === undefined ? '' : state[key]; el.classList.toggle('active', !!state[key] && state[key] !== 'any' && !(key === 'sort')); });
+            $('#loc-note').innerHTML = loc ? '' : `<div class="lh-alert warn" style="margin-bottom:10px">Distance filters and “nearest” sorting need your location. <button type="button" class="lh-link" id="set-loc">Set location</button></div>`;
+            const b = $('#set-loc'); if (b) b.addEventListener('click', () => LH.openLocationModal());
+            const anyFilter = ['radiusKm', 'minRating', 'maxPrice', 'minExperience'].some((k) => state[k]) || (state.availability && state.availability !== 'any') || state.reviewedOnly;
+            $('#clear-filters').hidden = !anyFilter;
+        };
+
+        const writeUrl = () => {
+            const p = new URLSearchParams();
+            Object.entries(state).forEach(([k, v]) => { if (v && v !== 'any') p.set(k, v); });
+            history.replaceState(null, '', window.location.pathname + (p.toString() ? '?' + p : ''));
+        };
+
+        const renderChips = () => {
+            const all = `<a class="lh-chip lh-chip-dark ${!state.category ? 'active' : ''}" href="category.html${state.q ? '?q=' + encodeURIComponent(state.q) : ''}">All</a>`;
+            $('#cat-chips').innerHTML = all + categories.map((c) => `<a class="lh-chip lh-chip-dark ${c.slug === state.category ? 'active' : ''}" href="category.html?category=${encodeURIComponent(c.slug)}${state.q ? '&q=' + encodeURIComponent(state.q) : ''}" ${c.slug === state.category ? 'aria-current="true"' : ''}>${esc(c.name)}</a>`).join('');
+            const active = $('#cat-chips .active'); if (active && active.scrollIntoView) active.scrollIntoView({ inline: 'center', block: 'nearest' });
+        };
+
+        const title = () => {
+            const cat = categories.find((c) => c.slug === state.category || c.name.toLowerCase() === state.category.toLowerCase());
+            if (cat) { state.category = cat.slug; }
+            const name = cat ? cat.name : '';
+            $('#page-title').textContent = state.q ? `Results for “${state.q}”` : (name || 'All professionals');
+            $('#crumb-current').textContent = name || (state.q ? 'Search' : 'Services');
+            $('#page-sub').textContent = cat && cat.description ? cat.description : '';
+            document.title = `${name || (state.q ? state.q : 'Find professionals')} | LocalHire`;
+            $('#map-link').href = 'search.html' + (state.q || name ? '?q=' + encodeURIComponent(state.q || name) : '');
+        };
+
+        const query = (pageNo) => {
+            const loc = LH.location.get();
+            const params = { limit: PAGE_SIZE, page: pageNo, category: state.category, q: state.q, sort: state.sort, minRating: state.minRating, maxPrice: state.maxPrice, minExperience: state.minExperience, reviewedOnly: state.reviewedOnly };
+            if (loc) { params.lat = loc.lat; params.lng = loc.lng; params.radiusKm = state.radiusKm || 20; }
+            if (state.availability !== 'any') { params.availability = state.availability; Object.assign(params, LH.nowParams()); }
+            return params;
+        };
+
+        const emptyState = () => {
+            const filtered = !$('#clear-filters').hidden;
+            return `<div style="grid-column:1/-1">${LH.stateBox({
+                icon: 'search',
+                title: filtered ? 'No professionals match these filters' : 'No professionals are available right now',
+                text: filtered ? 'Try widening the distance, lowering the rating or removing a filter.' : (hasLocation() ? 'Verified professionals appear here as soon as they go online near you. Try a different category or check back soon.' : 'Verified professionals appear here as soon as they go online. Set your location to look near you.'),
+                action: filtered ? '<button class="lh-btn lh-btn-primary" type="button" data-clear>Clear all filters</button>' : '<a class="lh-btn lh-btn-primary" href="customer-home.html">Back to home</a>'
+            })}</div>`;
+        };
+
+        const fetchPage = async (append) => {
+            const mine = ++seq;
+            const box = $('#results');
+            if (!append) { box.innerHTML = LH.skeletonCards(6); $('#result-count').textContent = 'Searching…'; $('#load-more').hidden = true; }
+            else { $('#load-more').disabled = true; $('#load-more').textContent = 'Loading…'; }
+            try {
+                const res = await LH.data.workers(query(page));
+                if (mine !== seq) return;
+                total = res.total;
+                loaded = append ? loaded.concat(res.workers) : res.workers;
+                if (!loaded.length) { box.innerHTML = emptyState(); const c = box.querySelector('[data-clear]'); if (c) c.addEventListener('click', clearAll); $('#result-count').textContent = '0 professionals'; $('#load-more').hidden = true; return; }
+                box.innerHTML = loaded.map(LH.workerCard).join('');
+                $('#result-count').textContent = `${total} ${total === 1 ? 'professional' : 'professionals'} available`;
+                $('#load-more').hidden = loaded.length >= total;
+            } catch (e) {
+                if (mine !== seq) return;
+                if (!append) {
+                    box.innerHTML = `<div style="grid-column:1/-1">${LH.stateBox({ icon: 'search', error: true, title: 'We could not load professionals', text: e.message || 'Please check your connection and try again.', action: '<button class="lh-btn lh-btn-ghost" type="button" data-retry>Try again</button>' })}</div>`;
+                    box.querySelector('[data-retry]').addEventListener('click', () => fetchPage(false));
+                    $('#result-count').textContent = '';
+                } else LH.toast(e.message || 'Could not load more professionals.');
+            } finally { $('#load-more').disabled = false; $('#load-more').textContent = 'Show more professionals'; }
+        };
+
+        const refresh = () => { page = 1; syncControls(); writeUrl(); title(); renderChips(); fetchPage(false); };
+        const clearAll = () => { Object.assign(state, { radiusKm: '', minRating: '', maxPrice: '', minExperience: '', availability: 'any', reviewedOnly: '' }); refresh(); };
+
+        Object.entries(controls).forEach(([key, el]) => el.addEventListener('change', () => { state[key] = el.value; refresh(); }));
+        $('#filters').addEventListener('submit', (e) => e.preventDefault());
+        $('#clear-filters').addEventListener('click', clearAll);
+        $('#load-more').addEventListener('click', () => { page += 1; fetchPage(true); });
+
+        await LH.location.restore();
+        LH.location.onChange(() => { state.sort = ''; refresh(); });
+        try { categories = await LH.data.categories(); } catch (e) { categories = []; }
+        refresh();
+    })();
+    </script>
+</body>
+</html>

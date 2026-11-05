@@ -71,3 +71,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-05T14:22:15+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Created dedicated marketplace discovery endpoints supporting category filtering, spatial proximity sorting, and worker listing summaries.
+
+### [2026-11-05] feat(ui): add category browsing, customer home, and marketplace styles
+- **Date:** 2026-11-05T19:35:02+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added customer category portal, responsive grid marketplace styling, and automated test suite for search and discovery.

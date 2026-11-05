@@ -18,7 +18,7 @@
             <div class="flex items-center gap-4">
                 <div class="flex bg-card p-1 rounded-full" style="background: rgba(15, 23, 42, 0.6); border-radius: 9999px; padding: 4px;">
                     <button id="view-grid" class="btn" style="padding: 0.5rem 1.5rem; border-radius: 9999px; background: var(--primary); color: white;">List View</button>
-                    <button id="view-map" class="btn text-muted" style="padding: 0.5rem 1.5rem; border-radius: 9999px; background: transparent;">Map View</button>
+                    <button id="view-map" class="btn text-muted" style="padding: 0.5rem 1.5rem; border-radius: 9999px; background: transparent;">Search area</button>
                 </div>
                 <div class="glass-card" style="padding: 0.5rem 1rem; border-radius: 9999px;">
                     <span id="results-count" class="text-muted">Loading results...</span>
@@ -88,8 +88,9 @@
                 </div>
 
                 <!-- Map View (Hidden by default) -->
-                <div id="search-map-container" style="display: none; width: 100%; height: 600px; border-radius: 16px; overflow: hidden; border: 1px solid var(--border-light);">
-                    <div id="search-map" style="width: 100%; height: 100%; z-index: 10;"></div>
+                <div id="search-map-container" style="display: none; margin-bottom: 1.5rem;">
+                    <div style="width: 100%; height: 320px; border-radius: 16px; overflow: hidden; border: 1px solid var(--border-light);"><div id="search-map" style="width: 100%; height: 100%; z-index: 10;"></div></div>
+                    <p class="text-muted" style="font-size: 0.8rem; margin-top: 0.5rem;">This map shows your search area. Professionals are listed below by area and approximate distance: their exact positions are private and never plotted.</p>
                 </div>
                 
                 <div id="no-results" style="display: none; text-align: center; padding: 4rem 2rem;" class="glass-card">
@@ -105,6 +106,7 @@
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="../js/data.js"></script>
+    <script src="../js/geo.js"></script>
     <script src="../js/api.js"></script>
     <script src="../js/app.js"></script>
     <script>
@@ -127,6 +129,8 @@
             }
 
             renderNavbar('navbar-container', 'pages');
+            // Categories come from the database (one source), the static options are only a fallback
+            window.localHireCategories.fill(document.getElementById('filter-category'));
 
             // Handle query parameters
             const urlParams = new URLSearchParams(window.location.search);
@@ -165,9 +169,8 @@
 
             const reverseGeocode = async (latitude, longitude) => {
                 const params = new URLSearchParams({ format: 'jsonv2', lat: latitude, lon: longitude });
-                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params}`);
-                if (!response.ok) throw new Error('Address lookup is unavailable.');
-                const data = await response.json();
+                let data;
+                try { data = await (window.LocalHireGeo ? LocalHireGeo.fetchJson(`https://nominatim.openstreetmap.org/reverse?${params}`) : fetch(`https://nominatim.openstreetmap.org/reverse?${params}`).then((r) => { if (!r.ok) throw new Error('x'); return r.json(); })); } catch (e) { throw new Error('Address lookup is unavailable.'); }
                 return data.display_name || '';
             };
 
@@ -207,9 +210,8 @@
                 locationStatus.textContent = 'Searching address…';
                 try {
                     const params = new URLSearchParams({ format: 'jsonv2', limit: '1', q: query });
-                    const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
-                    if (!response.ok) throw new Error('Address search is unavailable.');
-                    const results = await response.json();
+                    let results;
+                    try { results = await (window.LocalHireGeo ? LocalHireGeo.fetchJson(`https://nominatim.openstreetmap.org/search?${params}`) : fetch(`https://nominatim.openstreetmap.org/search?${params}`).then((r) => { if (!r.ok) throw new Error('x'); return r.json(); })); } catch (e) { throw new Error('Address search is unavailable.'); }
                     if (!results.length) throw new Error('No matching address was found.');
                     await selectCoordinates(Number(results[0].lat), Number(results[0].lon));
                 } catch (error) {
@@ -290,7 +292,7 @@
                 viewGridBtn.classList.add('text-muted');
                 viewGridBtn.style.color = '';
                 
-                resultsContainer.style.display = 'none';
+                resultsContainer.style.display = resultsContainer.children.length > 0 ? 'grid' : 'none';
                 mapContainer.style.display = 'block';
                 if (searchMap) searchMap.invalidateSize();
                 updateMap([]);
@@ -355,18 +357,15 @@
                 resultsContainer.innerHTML = '';
                 
                 if (filtered.length === 0) {
-                    resultsContainer.style.display = isMapView ? 'none' : 'grid';
+                    resultsContainer.style.display = 'none';
                     mapContainer.style.display = isMapView ? 'block' : 'none';
                     noResults.style.display = 'block';
                     resultsCount.textContent = '0 results';
                     updateMap([]);
                 } else {
                     noResults.style.display = 'none';
-                    if (isMapView) {
-                        mapContainer.style.display = 'block';
-                    } else {
-                        resultsContainer.style.display = 'grid';
-                    }
+                    if (isMapView) mapContainer.style.display = 'block';
+                    resultsContainer.style.display = 'grid';
                     resultsCount.textContent = `${filtered.length} professionals found`;
                     
                     filtered.forEach(worker => {
@@ -389,7 +388,7 @@
                     searchMap = L.map('search-map').setView([centerLat, centerLng], zoom);
                     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                         maxZoom: 19,
-                        attribution: '&copy; OpenStreetMap'
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                     }).addTo(searchMap);
                     markerLayer = L.layerGroup().addTo(searchMap);
                     searchMap.on('click', async (event) => {
@@ -412,30 +411,11 @@
                         .addTo(markerLayer);
                 }
 
-                workers.forEach(worker => {
-                    const wLat = worker.mapLocation?.latitude;
-                    const wLng = worker.mapLocation?.longitude;
-
-                    if (Number.isFinite(wLat) && Number.isFinite(wLng)) {
-                        const marker = L.marker([wLat, wLng]).addTo(markerLayer);
-                        
-                        const popupContent = `
-                            <div style="min-width: 200px; display: flex; flex-direction: column; gap: 8px;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <img src="${escapeHtml(worker.avatarUrl)}" alt="" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">
-                                    <div>
-                                        <h4 style="margin: 0; font-size: 14px;">${escapeHtml(worker.name)}</h4>
-                                        <span style="font-size: 12px; color: #666;">${escapeHtml(worker.category)} · ${Number(worker.rating || 0)}★</span>
-                                    </div>
-                                </div>
-                                <div style="font-size: 12px; color: #444;">Approximate location · ${Number(worker.distanceKm || 0)} km away</div>
-                                <a href="profile.html?id=${encodeURIComponent(worker.id || worker._id)}" style="display: block; width: 100%; text-align: center; background: var(--primary); color: white; padding: 6px; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: bold; margin-top: 5px;">View Profile</a>
-                            </div>
-                        `;
-                        marker.bindPopup(popupContent);
-                        marker.on('click', () => searchMap.panTo([wLat, wLng]));
-                    }
-                });
+                // Worker positions are never plotted: only the area being searched is shown.
+                if (selectedLocation) {
+                    const km = Number(radiusInput.value);
+                    if (Number.isFinite(km) && km > 0) L.circle([selectedLocation.latitude, selectedLocation.longitude], { radius: km * 1000, weight: 1, color: '#5b3df5', fillOpacity: 0.06 }).addTo(markerLayer);
+                }
             }
 
             applyBtn.addEventListener('click', async () => {
