@@ -81,3 +81,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-06T11:30:19+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Created database migration 20261106000000_payments_settlements for ledger transactions, escrow records, and worker payouts.
+
+### [2026-11-06] feat(payments): implement payment core pricing and payout account services
+- **Date:** 2026-11-06T16:05:42+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Implemented pricing calculation engine, platform commission rules, and worker linked payout account management.
