@@ -86,3 +86,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-06T16:05:42+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Implemented pricing calculation engine, platform commission rules, and worker linked payout account management.
+
+### [2026-11-06] feat(payments): implement settlement service and payment controller endpoints
+- **Date:** 2026-11-06T21:10:35+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Replaced legacy escrow module with unified payment controller, escrow release transitions, and payout settlement service.
