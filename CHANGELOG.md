@@ -76,3 +76,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-05T19:35:02+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added customer category portal, responsive grid marketplace styling, and automated test suite for search and discovery.
+
+### [2026-11-06] feat(db): add payments and settlements schema migration
+- **Date:** 2026-11-06T11:30:19+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Created database migration 20261106000000_payments_settlements for ledger transactions, escrow records, and worker payouts.
