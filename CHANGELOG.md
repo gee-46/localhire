@@ -96,3 +96,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-07T10:15:50+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added migration 20261107000000_chat_notifications_push for chat messages, read receipts, notification logs, and push subscriptions.
+
+### [2026-11-07] feat(chat): implement real-time chat service and notification handlers
+- **Date:** 2026-11-07T15:20:14+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Built Socket.IO bidirectional chat service with room authorization, conversation history pagination, and communication styles.
