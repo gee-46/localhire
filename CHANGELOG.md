@@ -91,3 +91,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-06T21:10:35+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Replaced legacy escrow module with unified payment controller, escrow release transitions, and payout settlement service.
+
+### [2026-11-07] feat(db): add chat, notifications, and web push migration
+- **Date:** 2026-11-07T10:15:50+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added migration 20261107000000_chat_notifications_push for chat messages, read receipts, notification logs, and push subscriptions.
