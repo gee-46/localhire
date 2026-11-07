@@ -101,3 +101,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-07T15:20:14+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Built Socket.IO bidirectional chat service with room authorization, conversation history pagination, and communication styles.
+
+### [2026-11-07] feat(push): add web push notifications, service worker, and subscription API
+- **Date:** 2026-11-07T19:45:28+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added VAPID Web Push notifications service, browser ServiceWorker push listeners, and safety test coverage.

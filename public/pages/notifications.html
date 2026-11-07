@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notifications | LocalHire</title>
+    <meta name="theme-color" content="#5b3df5">
+    <link rel="stylesheet" href="../css/marketplace.css">
+    <link rel="stylesheet" href="../css/comm.css">
+</head>
+<body class="lh">
+    <div id="lh-header"></div>
+
+    <main id="main" class="lh-main">
+        <div class="cm-page">
+            <h1 class="display" style="font-size:30px;line-height:1.2;margin:0">Notifications</h1>
+            <p class="lh-help" style="font-size:14px;margin:4px 0 14px">Updates about your bookings, payments, messages and earnings.</p>
+
+            <section id="push-card" class="cm-card" aria-labelledby="push-h" hidden>
+                <h3 id="push-h">Browser notifications</h3>
+                <p id="push-text"></p>
+                <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap" id="push-actions"></div>
+            </section>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+                <div class="cm-cats" id="cats" role="group" aria-label="Filter by category"></div>
+                <button type="button" class="cm-btn ghost" id="read-all" hidden>Mark all as read</button>
+            </div>
+
+            <div id="list" class="cm-list" aria-live="polite"><div class="cm-skel"></div><div class="cm-skel"></div><div class="cm-skel"></div></div>
+            <div style="text-align:center;margin:16px 0"><button type="button" class="cm-btn ghost" id="more" hidden>Show older notifications</button></div>
+        </div>
+    </main>
+    <div id="lh-bottom"></div>
+
+    <script src="../js/data.js"></script>
+    <script src="../js/geo.js"></script>
+    <script src="../js/api.js"></script>
+    <script src="../js/app.js"></script>
+    <script src="../js/marketplace.js"></script>
+    <script src="../js/notifications.js"></script>
+    <script>
+    (async () => {
+        const user = window.localHireApp.getCurrentUser();
+        if (!user) { window.location.replace('auth.html'); return; }
+        const N = window.LocalHireNotify;
+        const $ = (s) => document.querySelector(s);
+        LH.renderHeader($('#lh-header'), {});
+        if (user.role === 'Customer') LH.renderBottomNav($('#lh-bottom'), 'account');
+
+        const CATS = [['', 'All'], ['BOOKING', 'Bookings'], ['PAYMENT', 'Payments'], ['MESSAGE', 'Messages'], ['DISPUTE', 'Disputes'], ['EARNINGS', 'Earnings'], ['SYSTEM', 'Other']];
+        let category = ''; let items = []; let hasMore = false; let seq = 0;
+
+        const drawCats = () => {
+            $('#cats').innerHTML = CATS.map(([v, l]) => `<button type="button" class="cm-cat" data-c="${v}" aria-pressed="${v === category}">${l}</button>`).join('');
+        };
+        const drawList = () => {
+            const box = $('#list');
+            if (!items.length) {
+                box.innerHTML = `<div class="cm-empty"><h3>${category ? 'Nothing in this category' : 'No notifications yet'}</h3><p>${category ? 'Try another category.' : 'When something happens with your bookings, payments or messages, you\'ll see it here.'}</p></div>`;
+            } else {
+                box.innerHTML = items.map((n) => `<a class="cm-item ${n.isRead ? '' : 'unread'}" href="${N.esc(N.urlFor(n))}" data-id="${N.esc(n.id)}">
+                    <span class="u" aria-hidden="true"></span>
+                    <div><span class="cm-chip cm-${N.esc(n.category.toLowerCase())}">${N.esc(N.CATEGORY[n.category] || 'Update')}</span>${n.isRead ? '' : '<span class="lh-sr"> unread</span>'}<strong>${N.esc(n.title)}</strong><p>${N.esc(n.message)}</p></div>
+                    <time datetime="${N.esc(n.createdAt)}" title="${N.esc(new Date(n.createdAt).toLocaleString('en-IN'))}">${N.esc(N.timeAgo(n.createdAt))}</time></a>`).join('');
+            }
+            $('#more').hidden = !hasMore;
+            $('#read-all').hidden = !items.some((n) => !n.isRead);
+        };
+        const load = async (append) => {
+            const mine = ++seq;
+            const qs = new URLSearchParams({ limit: '20' });
+            if (category) qs.set('category', category);
+            if (append && items.length) qs.set('before', items[items.length - 1].createdAt);
+            const r = await N.call('GET', '/notifications?' + qs.toString());
+            if (mine !== seq) return;
+            if (!r.ok) { $('#list').innerHTML = `<div class="cm-empty" role="alert"><h3>Could not load notifications</h3><p>${N.esc(r.data.message || 'Please try again.')}</p></div>`; return; }
+            items = append ? items.concat(r.data.notifications) : r.data.notifications;
+            hasMore = r.data.hasMore;
+            drawList();
+        };
+
+        $('#cats').addEventListener('click', (e) => { const b = e.target.closest('[data-c]'); if (!b) return; category = b.dataset.c; drawCats(); $('#list').innerHTML = '<div class="cm-skel"></div><div class="cm-skel"></div>'; load(false); });
+        $('#more').addEventListener('click', () => load(true));
+        $('#read-all').addEventListener('click', async () => { await N.call('POST', '/notifications/read-all', category ? { category } : {}); items = items.map((n) => ({ ...n, isRead: true })); drawList(); N.refreshCounts(); });
+        $('#list').addEventListener('click', (e) => {
+            const a = e.target.closest('[data-id]'); if (!a) return;
+            const n = items.find((x) => x.id === a.dataset.id);
+            if (n && !n.isRead) N.call('PATCH', `/notifications/${encodeURIComponent(n.id)}/read`); // navigation continues
+        });
+        // live: a new notification appears at the top without a reload
+        N.on('notification', (n) => { if (!category || category === n.category) { items = [n, ...items.filter((x) => x.id !== n.id)]; drawList(); } });
+
+        // ── browser (push) notifications ──
+        const paintPush = async () => {
+            const st = await N.pushState();
+            const card = $('#push-card'); const text = $('#push-text'); const actions = $('#push-actions');
+            card.hidden = false; actions.innerHTML = '';
+            if (!st.supported) { text.textContent = st.reason; return; }
+            if (!st.configured) { text.textContent = 'Browser notifications are not switched on for this LocalHire server yet. You will still see updates here and in the app while it is open.'; return; }
+            if (st.permission === 'denied') { text.textContent = 'Notifications are blocked for LocalHire in your browser settings. Allow them there (usually the lock icon next to the address bar), then come back and turn them on.'; return; }
+            if (st.subscribed && st.permission === 'granted') {
+                text.textContent = 'On for this device. You will get an alert for new booking activity and messages even when LocalHire is closed, as long as your browser is running and allows it.';
+                actions.innerHTML = '<button type="button" class="cm-btn ghost" id="push-off">Turn off on this device</button>';
+                $('#push-off').addEventListener('click', async () => { await N.disablePush(); paintPush(); });
+            } else {
+                text.textContent = 'Get an alert on this device when a booking changes or a message arrives, even when LocalHire is closed. Your browser will ask for permission when you press the button.';
+                actions.innerHTML = '<button type="button" class="cm-btn primary" id="push-on">Turn on browser notifications</button><span id="push-msg" role="status" class="lh-help"></span>';
+                $('#push-on').addEventListener('click', async () => { $('#push-on').disabled = true; const r = await N.enablePush(); if (r.ok) paintPush(); else { $('#push-on').disabled = false; $('#push-msg').textContent = r.message; } });
+            }
+        };
+
+        drawCats();
+        await load(false);
+        N.connect(); N.refreshCounts();
+        paintPush();
+    })();
+    </script>
+</body>
+</html>

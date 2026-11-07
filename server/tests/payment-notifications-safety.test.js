@@ -1,15 +1,23 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const escrowController = require('../controllers/escrowController');
 const notificationController = require('../controllers/notificationController');
 
-test('payment provider status must be disabled when no supported payment gateway is configured', () => {
-  const status = escrowController.getEscrowProviderStatus();
-
-  assert.equal(status.enabled, false);
-  assert.match(status.message, /No supported payment provider/i);
-  assert.equal(status.provider, 'UNAVAILABLE');
+test('the gateway is reported unavailable (never simulated) when Razorpay keys are missing', () => {
+  const original = { id: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET };
+  delete process.env.RAZORPAY_KEY_ID;
+  delete process.env.RAZORPAY_KEY_SECRET;
+  const cfg = require('../config/razorpay');
+  cfg.setRazorpayInstance(null);
+  try {
+    assert.equal(cfg.isRazorpayConfigured(), false);
+    assert.equal(cfg.getRazorpayInstance(), null);
+    assert.equal(cfg.getRazorpayMode(), null);
+    assert.equal(typeof cfg.isSimulationAllowed, 'undefined', 'there is no simulation switch any more');
+  } finally {
+    if (original.id) process.env.RAZORPAY_KEY_ID = original.id;
+    if (original.secret) process.env.RAZORPAY_KEY_SECRET = original.secret;
+  }
 });
 
 test('booking notification payloads must include user, type, title, and message metadata', () => {
