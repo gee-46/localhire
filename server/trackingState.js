@@ -43,7 +43,22 @@ const stopWorkerTracking = (workerId, message = 'Worker stopped sharing location
   return stopped;
 };
 
+// Drop every live socket belonging to a user (logout / password reset / credential rotation).
+// Socket auth is only checked at connect time, so revoked sessions must be disconnected explicitly.
+const disconnectUserSockets = (userId) => {
+  if (!socketServer || !socketServer.sockets || !socketServer.sockets.sockets) return 0;
+  let closed = 0;
+  for (const socket of socketServer.sockets.sockets.values()) {
+    if (socket.user && String(socket.user.id) === String(userId)) {
+      socket.disconnect(true);
+      closed += 1;
+    }
+  }
+  return closed;
+};
+
 module.exports = {
+  disconnectUserSockets,
   activeTracking,
   setSocketServer,
   getSocketServer,

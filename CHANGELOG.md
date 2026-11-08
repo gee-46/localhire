@@ -111,3 +111,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-08T11:05:22+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Created database migration 20261108000000_journey_tracking for recording worker GPS waypoints, ETA estimates, and trip states.
+
+### [2026-11-08] feat(tracking): implement live worker journey tracking service and state manager
+- **Date:** 2026-11-08T14:50:37+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Built journey tracking service with in-memory geocache, waypoint sanitization, and high-precision spatial distance formulas.
