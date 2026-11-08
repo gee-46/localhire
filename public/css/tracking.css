@@ -1,0 +1,44 @@
+/* LocalHire booking tracking page (customer + worker). Self-contained (tk- prefix); pairs with marketplace.css + comm.css. */
+.tk-page { max-width: 880px; margin: 0 auto; padding: 16px 16px 96px; font-family: 'Poppins', system-ui, sans-serif; color: #101828; }
+.tk-back { display: inline-block; margin-bottom: 8px; color: #475467; text-decoration: none; font-size: 14px; }
+.tk-card { background: #fff; border: 1px solid #e4e7ec; border-radius: 16px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
+.tk-who { display: flex; align-items: center; gap: 12px; }
+.tk-av { width: 52px; height: 52px; border-radius: 50%; background: #efecff; color: #4a2fd9; font-weight: 700; display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
+.tk-av img { width: 100%; height: 100%; object-fit: cover; }
+.tk-who strong { display: block; font-size: 16px; } .tk-who small { color: #667085; font-size: 13px; display: block; }
+.tk-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.tk-chip { padding: 3px 10px; border-radius: 999px; background: #f2f4f7; color: #344054; font-size: 12px; font-weight: 600; }
+.tk-chip.ok { background: #e3f6ee; color: #0b5f43; } .tk-chip.wait { background: #fff4e5; color: #93370d; } .tk-chip.bad { background: #fdecea; color: #912018; } .tk-chip.info { background: #efecff; color: #4a2fd9; }
+
+.tk-steps { display: flex; list-style: none; margin: 4px 0 0; padding: 0; gap: 4px; overflow-x: auto; }
+.tk-steps li { flex: 1 0 74px; text-align: center; font-size: 11px; color: #98a2b3; position: relative; padding-top: 22px; min-width: 66px; }
+.tk-steps li::before { content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; background: #e4e7ec; border: 2px solid #e4e7ec; }
+.tk-steps li.done { color: #0b5f43; } .tk-steps li.done::before { background: #12805c; border-color: #12805c; }
+.tk-steps li.now { color: #4a2fd9; font-weight: 700; } .tk-steps li.now::before { background: #fff; border-color: #5b3df5; box-shadow: 0 0 0 3px rgba(91, 61, 245, .2); }
+
+.tk-status { padding: 12px 14px; border-radius: 12px; font-size: 14px; margin-bottom: 14px; background: #f9fafb; color: #344054; }
+.tk-status b { font-weight: 600; }
+.tk-status.live { background: #e3f6ee; color: #0b5f43; } .tk-status.delayed { background: #fff4e5; color: #93370d; } .tk-status.stale { background: #fdecea; color: #912018; }
+.tk-status.info { background: #eff8ff; color: #175cd3; }
+
+.tk-map { width: 100%; height: 340px; border-radius: 16px; border: 1px solid #e4e7ec; margin-bottom: 14px; z-index: 0; }
+@media (max-width: 560px) { .tk-map { height: 300px; } }
+.tk-map-empty { display: flex; align-items: center; justify-content: center; text-align: center; height: 160px; border: 1px dashed #d0d5dd; border-radius: 16px; color: #667085; padding: 16px; margin-bottom: 14px; background: #fff; }
+.tk-pin { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; color: #fff; font-size: 16px; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(16, 24, 40, .35); }
+.tk-pin.w { background: #5b3df5; } .tk-pin.d { background: #12805c; }
+.tk-meta { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 14px; }
+@media (min-width: 560px) { .tk-meta { grid-template-columns: 1fr 1fr; } }
+.tk-meta div { background: #fff; border: 1px solid #e4e7ec; border-radius: 12px; padding: 10px 12px; font-size: 13px; color: #475467; }
+.tk-meta b { display: block; color: #101828; font-size: 15px; }
+.tk-note { font-size: 12.5px; color: #667085; margin: 4px 0 14px; }
+
+.tk-ctrl { display: grid; gap: 10px; }
+.tk-ctrl .cm-btn { width: 100%; min-height: 48px; font-size: 15px; }
+.tk-row { display: flex; gap: 8px; flex-wrap: wrap; } .tk-row > * { flex: 1 1 140px; }
+.tk-gps { display: grid; gap: 4px; font-size: 13px; color: #475467; margin-bottom: 10px; }
+.tk-gps b { color: #101828; }
+.tk-msg { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; background: #fdecea; color: #912018; }
+.tk-msg[hidden] { display: none; }
+.tk-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.tk-skel { height: 56px; border-radius: 12px; background: linear-gradient(90deg, #f2f4f7, #e4e7ec, #f2f4f7); background-size: 200% 100%; animation: tkSkel 1.2s infinite; margin-bottom: 12px; }
+@keyframes tkSkel { to { background-position: -200% 0 } }

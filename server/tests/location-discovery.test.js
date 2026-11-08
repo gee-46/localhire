@@ -98,8 +98,12 @@ test('nearby search returns sorted distance and coarse markers without precise c
     await userController.getWorkers(req, res);
 
     assert.equal(res.statusCode, 200);
-    assert.equal(res.payload.workers[0].distanceKm, 2.3);
-    assert.deepEqual(res.payload.workers[0].mapLocation, { latitude: 12.35, longitude: 77.12 });
+    // distance is deliberately coarse: rounded UP to the nearest 0.5 km so it cannot be used to triangulate a worker
+    assert.equal(res.payload.workers[0].distanceKm, 2.5);
+    // customer-facing results never include private contact details
+    assert.equal(Object.hasOwn(res.payload.workers[0], 'email'), false);
+    assert.equal(Object.hasOwn(res.payload.workers[0], 'phone'), false);
+    assert.equal(Object.hasOwn(res.payload.workers[0], 'mapLocation'), false, 'no map position of any precision is returned publicly');
     assert.equal(Object.hasOwn(res.payload.workers[0], 'latitude'), false);
     assert.equal(Object.hasOwn(res.payload.workers[0], 'longitude'), false);
     assert.equal(res.payload.workers[0].availability, 'Available now');

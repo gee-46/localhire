@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track booking | LocalHire</title>
+    <meta name="theme-color" content="#5b3df5">
+    <link rel="stylesheet" href="../css/marketplace.css">
+    <link rel="stylesheet" href="../css/comm.css">
+    <link rel="stylesheet" href="../css/tracking.css">
+</head>
+<body class="lh" style="padding-bottom:0">
+    <div id="lh-header"></div>
+
+    <main id="main" class="lh-main">
+        <div class="tk-page">
+            <a class="tk-back" href="my-jobs.html">&larr; My bookings</a>
+            <div id="tk-root" aria-live="polite"><div class="tk-skel"></div><div class="tk-skel"></div><div class="tk-skel" style="height:200px"></div></div>
+        </div>
+    </main>
+
+    <script src="../js/data.js"></script>
+    <script src="../js/api.js"></script>
+    <script src="../js/app.js"></script>
+    <script src="../js/marketplace.js"></script>
+    <script src="../js/notifications.js"></script>
+    <script src="../js/tracking.js"></script>
+    <script>
+    (async () => {
+        const me = window.localHireApp.getCurrentUser();
+        if (!me) { window.location.replace('auth.html'); return; }
+        const T = window.LocalHireTracking; const N = window.LocalHireNotify;
+        const E = T.esc;
+        LH.renderHeader(document.getElementById('lh-header'), {});
+        const root = document.getElementById('tk-root');
+        const bookingId = new URLSearchParams(window.location.search).get('booking');
+        if (!bookingId) { root.innerHTML = '<div class="cm-empty"><h3>No booking selected</h3><p>Open a booking from My bookings and choose Track.</p></div>'; return; }
+
+        const STEPS = [['BOOKING_ACCEPTED', 'Accepted'], ['JOURNEY_STARTED', 'On the way'], ['WORKER_ARRIVED', 'Arrived'], ['SERVICE_IN_PROGRESS', 'In service'], ['COMPLETION_REQUESTED', 'Confirm'], ['COMPLETED', 'Done']];
+        const STATUS_LABEL = { REQUESTED: 'Requested', CONFIRMED: 'Confirmed', DISPATCHED: 'On the way', IN_PROGRESS: 'In progress', AWAITING_CUSTOMER_CONFIRMATION: 'Awaiting confirmation', COMPLETED: 'Completed', CANCELLED: 'Cancelled', DISPUTED: 'Under dispute' };
+        const initials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?';
+        let view = null; let role = null; let sharer = null; let sharerState = null; let map = null; let leaflet = null; let lastMapKey = ''; let busy = false;
+        let permission = await T.permissionState();
+        let viewer = null; let notice = null;
+
+        // ── map ──────────────────────────────────────────────────────────────
+        const pinIcon = (cls, glyph, label) => leaflet.divIcon({ className: '', html: `<div class="tk-pin ${cls}" role="img" aria-label="${E(label)}">${glyph}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] });
+        async function drawMap(loc, dest, mine) {
+            const el = document.getElementById('tk-map'); if (!el) { map = null; return; }
+            try { leaflet = await T.loadLeaflet(); } catch (e) { el.outerHTML = `<div class="tk-map-empty" role="alert">${E(e.message)}</div>`; return; }
+            if (!map || map.m._container !== el) {
+                if (map) { try { map.m.remove(); } catch (e) { /* already gone */ } }
+                map = { m: leaflet.map(el, { zoomControl: true, attributionControl: true }), layers: {} };
+                leaflet.tileLayer(T.TILE_URL, { maxZoom: 19, attribution: T.ATTRIBUTION }).addTo(map.m);
+                map.fitted = false;
+            }
+            const pts = [];
+            if (loc) {
+                const ll = [loc.latitude, loc.longitude]; pts.push(ll);
+                if (!map.layers.w) map.layers.w = leaflet.marker(ll, { icon: pinIcon('w', mine ? '📍' : '🚗', mine ? 'You' : 'Professional'), keyboard: false }).addTo(map.m); else map.layers.w.setLatLng(ll);
+                if (loc.accuracy && loc.accuracy > 40) { if (!map.layers.c) map.layers.c = leaflet.circle(ll, { radius: loc.accuracy, weight: 1, color: '#5b3df5', fillOpacity: 0.08 }).addTo(map.m); else { map.layers.c.setLatLng(ll); map.layers.c.setRadius(loc.accuracy); } }
+                else if (map.layers.c) { map.m.removeLayer(map.layers.c); map.layers.c = null; }
+            }
+            if (dest) {
+                const dl = [dest.latitude, dest.longitude]; pts.push(dl);
+                if (!map.layers.d) map.layers.d = leaflet.marker(dl, { icon: pinIcon('d', '🏠', mine ? 'Customer' : 'Your location'), keyboard: false }).addTo(map.m); else map.layers.d.setLatLng(dl);
+            }
+            const key = pts.map((p) => p.join(',')).join('|');
+            if (key !== lastMapKey) {
+                lastMapKey = key;
+                if (pts.length > 1 && !map.fitted) { map.m.fitBounds(leaflet.latLngBounds(pts), { padding: [40, 40], maxZoom: 16 }); map.fitted = true; }
+                else if (pts.length === 1 && !map.fitted) { map.m.setView(pts[0], 15); map.fitted = true; }
+                else if (loc && pts.length) { /* keep the user's zoom; just keep the marker in view */ if (!map.m.getBounds().contains([loc.latitude, loc.longitude])) map.m.panTo([loc.latitude, loc.longitude]); }
+            }
+            setTimeout(() => map && map.m.invalidateSize(), 60);
+        }
+
+        // ── shared bits ──────────────────────────────────────────────────────
+        const stepper = () => {
+            const idx = STEPS.findIndex((s) => s[0] === view.journeyStatus);
+            if (idx < 0) return '';
+            return `<ol class="tk-steps" aria-label="Journey progress">${STEPS.map((s, i) => `<li class="${i < idx ? 'done' : i === idx ? 'now' : ''}" ${i === idx ? 'aria-current="step"' : ''}>${E(s[1])}</li>`).join('')}</ol>`;
+        };
+        const freshnessBanner = () => {
+            const name = E(view.worker.name);
+            const js = view.journeyStatus;
+            if (!js) return `<div class="tk-status">Tracking isn't available for this booking${view.status === 'CANCELLED' ? ' because it was cancelled' : ''}.</div>`;
+            if (js === 'BOOKING_ACCEPTED') return `<div class="tk-status info">${role === 'Customer' ? `Live tracking starts when ${name} begins the journey.` : 'Start the journey when you set off. Your live location is shared with this customer only, from then until you arrive.'}</div>`;
+            if (js === 'WORKER_ARRIVED') return `<div class="tk-status live"><b>${role === 'Customer' ? `${name} has arrived.` : 'You have confirmed arrival.'}</b> Live location sharing has ended.</div>`;
+            if (js === 'SERVICE_IN_PROGRESS') return '<div class="tk-status info"><b>The service is in progress.</b> Location sharing is off.</div>';
+            if (js === 'COMPLETION_REQUESTED') return `<div class="tk-status info">${role === 'Customer' ? `${name} says the work is finished. Please confirm completion in My bookings.` : 'Waiting for the customer to confirm completion.'}</div>`;
+            if (js === 'COMPLETED') return '<div class="tk-status live"><b>Completed.</b></div>';
+            // JOURNEY_STARTED
+            if (!view.location) return `<div class="tk-status info">${role === 'Customer' ? `<b>${name} has started the journey.</b> Waiting for the first location update.` : '<b>Journey started.</b> Waiting for your first GPS reading…'}</div>`;
+            const f = T.freshnessOf(view.lastUpdated);
+            // the worker's connection dropped / they paused: never keep saying "live"
+            if (view.paused && f !== 'stale') return `<div class="tk-status delayed" role="status"><b>Updates have stopped.</b> Showing the last known position from ${E(T.clock(view.lastUpdated))} (${E(T.ago(view.lastUpdated))}). ${role === 'Customer' ? `${name}'s phone may be offline, locked or out of signal.` : 'Share your location again to resume.'}</div>`;
+            if (f === 'live') return `<div class="tk-status live" role="status"><b>Live</b> · updated ${E(T.ago(view.lastUpdated))}</div>`;
+            if (f === 'delayed') return `<div class="tk-status delayed" role="status"><b>Updates are delayed</b> · last update ${E(T.ago(view.lastUpdated))}</div>`;
+            return `<div class="tk-status stale" role="status"><b>Not live.</b> Showing the last known position from ${E(T.clock(view.lastUpdated))} (${E(T.ago(view.lastUpdated))}). ${role === 'Customer' ? `${name}'s phone may be offline, locked or out of signal.` : 'Keep this page open and your screen on.'}</div>`;
+        };
+
+        // ── customer view ────────────────────────────────────────────────────
+        const customerHtml = () => {
+            const w = view.worker; const f = T.freshnessOf(view.lastUpdated);
+            const showMap = view.sharing && view.location;
+            const meta = [];
+            if (view.sharing && view.location) {
+                meta.push(`<div>Last update<b>${E(T.ago(view.lastUpdated))}</b>${view.location.accuracy != null ? `<span>Accuracy ±${Math.round(view.location.accuracy)} m</span>` : ''}</div>`);
+                meta.push(view.distanceKm != null && f !== 'stale'
+                    ? `<div>Distance<b>About ${view.distanceKm} km away</b><span>${E(view.distanceNote || '')}</span></div>`
+                    : '<div>Distance<b>Not available</b><span>Shown only when the GPS fix is accurate and recent.</span></div>');
+            }
+            return `
+              <div class="tk-card"><div class="tk-who"><div class="tk-av">${w.avatarUrl ? `<img src="${E(w.avatarUrl)}" alt="">` : E(initials(w.name))}</div>
+                <div><strong>${E(w.name)}</strong><small>${E(w.profession)}</small><small>Booking ${E(view.bookingNumber)}</small></div></div>
+                <div class="tk-chips"><span class="tk-chip info">${E(STATUS_LABEL[view.status] || view.status)}</span>${view.journeyStatus && (STATUS_LABEL[view.status] || '') !== STEPS.find((s) => s[0] === view.journeyStatus)[1] ? `<span class="tk-chip">${E(STEPS.find((s) => s[0] === view.journeyStatus)[1])}</span>` : ''}</div>
+                ${stepper()}</div>
+              ${freshnessBanner()}
+              ${showMap ? '<div id="tk-map" class="tk-map" role="region" aria-label="Map showing the professional\'s last position"></div>' : (view.journeyStatus === 'JOURNEY_STARTED' ? '' : '<div class="tk-map-empty"><span>The map appears here while the professional is on the way.</span></div>')}
+              ${meta.length ? `<div class="tk-meta">${meta.join('')}</div>` : ''}
+              <p class="tk-note">Only you and your professional can see this. Sharing ends when they arrive. Arrival time estimates aren't available.</p>
+              <div class="tk-row"><a class="cm-btn primary tk-link" href="chat.html?booking=${encodeURIComponent(view.bookingId)}">Message ${E(w.name.split(' ')[0])}</a><a class="cm-btn ghost tk-link" href="my-jobs.html?booking=${encodeURIComponent(view.bookingId)}">Booking details</a></div>`;
+        };
+
+        // ── worker view ──────────────────────────────────────────────────────
+        const workerHtml = () => {
+            const js = view.journeyStatus; const links = T.navLinks(view.destination);
+            const s = sharerState; const acc = T.accuracyInfo(s ? s.accuracy : (view.location ? view.location.accuracy : null));
+            const permText = { granted: 'Allowed', denied: 'Blocked', prompt: 'Not asked yet', unsupported: 'Not supported' }[permission] || permission;
+            const gps = `<div class="tk-gps" aria-label="Location status">
+                <div>Location permission: <b>${E(permText)}</b></div>
+                <div>GPS accuracy: <b>${s && s.accuracy != null ? E(acc.label) : '—'}</b>${s && s.accuracy != null ? ` <span>(±${Math.round(s.accuracy)} m)</span>` : ''}</div>
+                <div>Sharing: <b>${s && s.running ? (s.paused ? 'Paused' : 'On') : 'Off'}</b>${s && s.lastSentAt ? ` · last sent ${E(T.ago(s.lastSentAt))}` : ''}${s && !s.network ? ' · <b style="color:#b42318">no internet connection</b>' : ''}</div></div>`;
+            let controls = '';
+            const navBtns = links ? `<div class="tk-row"><a class="cm-btn ghost tk-link" href="${E(links.geo)}">Open in maps app</a><a class="cm-btn ghost tk-link" href="${E(links.osm)}" target="_blank" rel="noopener">OpenStreetMap directions</a></div>` : (view.address ? '<p class="tk-note">This address has no saved map position, so use the address above to navigate.</p>' : '');
+            if (js === 'BOOKING_ACCEPTED') {
+                controls = `${navBtns}<button class="cm-btn primary" type="button" data-act="start" ${busy ? 'disabled' : ''}>Start journey</button><button class="cm-btn ghost" type="button" data-act="start-nogps">Start without sharing my location</button>
+                    <p class="tk-note">Starting shares your live location with this customer only, and stops when you tap “I've arrived”. Your browser will ask for location permission if it has not already.</p>`;
+            } else if (js === 'JOURNEY_STARTED') {
+                controls = `${navBtns}<button class="cm-btn primary" type="button" data-act="arrived" ${busy ? 'disabled' : ''}>I've arrived</button>
+                    <div class="tk-row">${s && s.running && !s.paused ? '<button class="cm-btn ghost" type="button" data-act="pause">Pause sharing</button>' : '<button class="cm-btn ghost" type="button" data-act="resume">' + (s && s.running ? 'Resume sharing' : 'Share my location') + '</button>'}</div>
+                    <p class="tk-note">Keep this page open and your screen on: browsers pause location sharing when the page is closed or the phone sleeps. The customer then sees your last update marked as not live.</p>`;
+            } else if (js === 'WORKER_ARRIVED') {
+                controls = '<button class="cm-btn primary" type="button" data-act="service">Start service</button>';
+            } else if (js === 'SERVICE_IN_PROGRESS') {
+                controls = '<button class="cm-btn primary" type="button" data-act="complete">Request completion</button><p class="tk-note">The customer confirms completion; that is what releases your earnings.</p>';
+            }
+            const showMap = view.sharing || js === 'BOOKING_ACCEPTED';
+            return `
+              <div class="tk-card"><div class="tk-who"><div class="tk-av">${E(initials(view.customerName || 'C'))}</div>
+                <div><strong>${E(view.customerName || 'Customer')}</strong><small>${E(view.address || 'Address not available')}</small><small>Booking ${E(view.bookingNumber)}</small></div></div>
+                <div class="tk-chips"><span class="tk-chip info">${E(STATUS_LABEL[view.status] || view.status)}</span></div>${stepper()}</div>
+              ${freshnessBanner()}
+              ${showMap && (view.destination || view.location) ? '<div id="tk-map" class="tk-map" role="region" aria-label="Map showing your position and the customer\'s location"></div>' : ''}
+              <div class="tk-card">${gps}${s && s.lastError ? `<div class="tk-msg" role="alert">${E(s.lastError.message)}</div>` : ''}${permission === 'denied' ? '<div class="tk-msg" role="alert">Location is blocked for LocalHire in this browser. Allow it in your browser settings (the lock icon beside the address bar), then reload this page.</div>' : ''}
+                <div class="tk-ctrl">${controls}</div><div id="tk-msg" class="tk-msg" role="alert" hidden></div></div>
+              <div class="tk-row"><a class="cm-btn ghost tk-link" href="chat.html?booking=${encodeURIComponent(view.bookingId)}">Message customer</a><a class="cm-btn ghost tk-link" href="my-jobs.html?booking=${encodeURIComponent(view.bookingId)}">Booking details</a></div>`;
+        };
+
+        // ── render ───────────────────────────────────────────────────────────
+        const render = async () => {
+            if (!view) return;
+            const active = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-act');
+            const prevMsg = document.getElementById('tk-msg'); const keepMsg = prevMsg && !prevMsg.hidden ? prevMsg.textContent : null;
+            // The map element is kept across re-renders (rebuilding it would reload tiles every few seconds)
+            const keepMap = document.getElementById('tk-map'); if (keepMap) keepMap.remove();
+            root.innerHTML = role === 'Customer' ? customerHtml() : workerHtml();
+            const slot = document.getElementById('tk-map');
+            if (keepMap && slot) slot.replaceWith(keepMap); else if (!slot) { map = null; lastMapKey = ''; }
+            if (keepMsg) { const m = document.getElementById('tk-msg'); if (m) { m.hidden = false; m.textContent = keepMsg; } }
+            if (active) { const b = root.querySelector(`[data-act="${active}"]`); if (b) b.focus(); }
+            if (document.getElementById('tk-map')) {
+                const mine = role === 'Worker';
+                const own = mine && sharerState && sharerState.lastFix ? { latitude: sharerState.lastFix.latitude, longitude: sharerState.lastFix.longitude, accuracy: sharerState.lastFix.accuracy } : (view.location || null);
+                await drawMap(own, view.destination || null, mine);
+            } else map = null;
+        };
+        const showMsg = (text) => { const m = document.getElementById('tk-msg'); if (m) { m.hidden = !text; m.textContent = text || ''; } };
+
+        // ── worker actions ───────────────────────────────────────────────────
+        const ensureSharer = () => {
+            if (sharer) return sharer;
+            sharer = T.createSharer({ bookingId, onState: (s) => { sharerState = s; if (s.lastError && s.lastError.code === 'denied') permission = 'denied'; render(); } });
+            return sharer;
+        };
+        const setStatus = async (status) => N.call('PUT', `/bookings/${encodeURIComponent(bookingId)}/status`, { status });
+        const act = async (name) => {
+            if (busy) return; busy = true; showMsg('');
+            try {
+                if (name === 'start' || name === 'start-nogps') {
+                    if (name === 'start') {
+                        const probe = await T.getPosition({ high: true, timeout: 20000 }).catch((e) => e);
+                        if (probe && probe.code && !probe.latitude) { permission = await T.permissionState(); showMsg(`${probe.message} You can also start without sharing your location.`); busy = false; return render(); }
+                    }
+                    const r = await setStatus('DISPATCHED');
+                    if (!r.ok) { showMsg(r.data.message || 'Could not start the journey.'); busy = false; return render(); }
+                    await viewer.refresh();
+                    if (name === 'start') ensureSharer().start();
+                } else if (name === 'arrived') {
+                    const r = await N.call('POST', `/bookings/${encodeURIComponent(bookingId)}/arrive`);
+                    if (!r.ok) showMsg(r.data.message || 'Could not confirm arrival.');
+                    else { if (sharer) sharer.stop(); await viewer.refresh(); }
+                } else if (name === 'service') {
+                    const r = await setStatus('IN_PROGRESS'); if (!r.ok) showMsg(r.data.message || 'Could not start the service.'); else await viewer.refresh();
+                } else if (name === 'complete') {
+                    const r = await setStatus('AWAITING_CUSTOMER_CONFIRMATION'); if (!r.ok) showMsg(r.data.message || 'Could not request completion.'); else await viewer.refresh();
+                } else if (name === 'pause') { ensureSharer().pause(); } else if (name === 'resume') { const s = ensureSharer(); if (s.state().running) s.resume(); else s.start(); }
+            } finally { busy = false; render(); }
+        };
+        root.addEventListener('click', (e) => { const b = e.target.closest('[data-act]'); if (b) act(b.dataset.act); });
+
+        // ── start ────────────────────────────────────────────────────────────
+        viewer = T.createViewer({
+            bookingId,
+            onView: async (v) => {
+                view = v; role = v.role;
+                // a worker whose journey is under way (or who reopened the page) resumes sharing automatically
+                if (role === 'Worker' && v.sharing && !sharer && permission !== 'denied') ensureSharer().start();
+                if (role === 'Worker' && !v.sharing && sharer && sharer.state().running) sharer.stop();
+                await render();
+            },
+            onEvent: () => {}
+        });
+        const first = await viewer.start();
+        if (!first || !first.ok) {
+            root.innerHTML = `<div class="cm-empty" role="alert"><h3>${first && (first.status === 403 || first.status === 404) ? 'You can\'t track this booking' : 'Tracking could not be loaded'}</h3><p>${E((first && first.message) || 'Please try again.')}</p><p style="margin-top:12px"><a class="cm-btn primary" href="my-jobs.html">Back to my bookings</a></p></div>`;
+            return;
+        }
+        window.addEventListener('beforeunload', () => { if (sharer) sharer.stop(); });
+        // "x s ago" and freshness are recomputed on a timer even when no data arrives
+        N.on('status', () => render());
+        // only the changing text is refreshed (buttons and the map are left alone so a tap is never lost mid-update)
+        const patchDynamic = () => {
+            if (!view || view.journeyStatus !== 'JOURNEY_STARTED') return;
+            const tpl = document.createElement('template'); tpl.innerHTML = role === 'Customer' ? customerHtml() : workerHtml();
+            for (const sel of ['.tk-status', '.tk-meta', '.tk-gps']) {
+                const a = root.querySelector(sel); const b = tpl.content.querySelector(sel);
+                if (!a !== !b) return render();
+                if (a && a.outerHTML !== b.outerHTML) a.replaceWith(b);
+            }
+        };
+        setInterval(patchDynamic, 5000);
+    })();
+    </script>
+</body>
+</html>
