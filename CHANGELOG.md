@@ -106,3 +106,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-07T19:45:28+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added VAPID Web Push notifications service, browser ServiceWorker push listeners, and safety test coverage.
+
+### [2026-11-08] feat(db): add worker journey tracking schema migration
+- **Date:** 2026-11-08T11:05:22+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Created database migration 20261108000000_journey_tracking for recording worker GPS waypoints, ETA estimates, and trip states.
