@@ -126,3 +126,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-09T09:40:18+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added migration 20261109000000_admin_suspension_gateway_fees for platform fee configuration, account suspension reasons, and audit logs.
+
+### [2026-11-09] feat(admin): implement financial metrics aggregation and date range analytics
+- **Date:** 2026-11-09T13:25:55+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Created administrative financial aggregation services for gross merchandise value, commission income, and date range slicing.
