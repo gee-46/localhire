@@ -121,3 +121,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-08T20:30:11+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Delivered interactive Leaflet map live tracking UI with marker animations, ETA countdowns, and automated tracking test coverage.
+
+### [2026-11-09] feat(db): add admin suspension and gateway fees schema migration
+- **Date:** 2026-11-09T09:40:18+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added migration 20261109000000_admin_suspension_gateway_fees for platform fee configuration, account suspension reasons, and audit logs.
