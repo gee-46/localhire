@@ -17,9 +17,9 @@ exports.getMetrics = async (req, res) => {
       totalApplications,
       activeBookings,
       totalBookings,
-      escrowAll,
-      escrowHeld,
-      escrowReleased
+      paymentsAll,
+      settlementsHeld,
+      settlementsEarned
     ] = await Promise.all([
       prisma.user.count(),
       prisma.user.count({ where: { role: 'WORKER' } }),
@@ -32,26 +32,16 @@ exports.getMetrics = async (req, res) => {
       prisma.jobApplication.count(),
       prisma.booking.count({ where: { status: { in: ['CONFIRMED', 'DISPATCHED', 'IN_PROGRESS', 'AWAITING_CUSTOMER_CONFIRMATION'] } } }),
       prisma.booking.count(),
-      prisma.escrowPayment.aggregate({
-        _sum: { totalAmount: true, platformFee: true, workerPayoutAmount: true },
-        _count: { id: true }
-      }),
-      prisma.escrowPayment.aggregate({
-        where: { status: 'HELD_IN_ESCROW' },
-        _sum: { totalAmount: true },
-        _count: { id: true }
-      }),
-      prisma.escrowPayment.aggregate({
-        where: { status: 'RELEASED_TO_WORKER' },
-        _sum: { totalAmount: true, platformFee: true, workerPayoutAmount: true },
-        _count: { id: true }
-      })
+      prisma.payment.aggregate({ where: { state: { in: ['CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'] } }, _sum: { totalAmount: true, platformFee: true, amountRefunded: true }, _count: { id: true } }),
+      prisma.workerSettlement.aggregate({ where: { status: { in: ['PENDING_COMPLETION', 'BLOCKED'] } }, _sum: { netAmount: true }, _count: { id: true } }),
+      prisma.workerSettlement.aggregate({ where: { status: { in: ['ELIGIBLE', 'PAYOUT_PROCESSING', 'PAID'] } }, _sum: { netAmount: true, commission: true }, _count: { id: true } })
     ]);
 
-    const revenue = Number(escrowReleased._sum?.platformFee || 0);
-    const heldInEscrow = Number(escrowHeld._sum?.totalAmount || 0);
-    const releasedToWorkers = Number(escrowReleased._sum?.workerPayoutAmount || 0);
-    const totalTransactionVolume = Number(escrowAll._sum?.totalAmount || 0);
+    // Platform revenue = platform fees on payments that were actually captured, plus commission on confirmed jobs.
+    const revenue = Number(paymentsAll._sum?.platformFee || 0) + Number(settlementsEarned._sum?.commission || 0);
+    const totalTransactionVolume = Number(paymentsAll._sum?.totalAmount || 0);
+    const heldInEscrow = Number(settlementsHeld._sum?.netAmount || 0); // key kept for the admin UI: captured, awaiting completion/dispute
+    const releasedToWorkers = Number(settlementsEarned._sum?.netAmount || 0);
 
     res.json({
       success: true,
@@ -73,11 +63,12 @@ exports.getMetrics = async (req, res) => {
         heldInEscrow,
         releasedToWorkers,
         totalTransactionVolume,
-        escrowTotals: {
-          held: heldInEscrow,
-          released: Number(escrowReleased._sum?.totalAmount || 0),
-          total: totalTransactionVolume,
-          count: escrowAll._count?.id || 0
+        paymentTotals: {
+          awaitingCompletion: heldInEscrow,
+          owedOrPaidToWorkers: releasedToWorkers,
+          captured: totalTransactionVolume,
+          refunded: Number(paymentsAll._sum?.amountRefunded || 0),
+          count: paymentsAll._count?.id || 0
         }
       }
     });
@@ -177,7 +168,7 @@ exports.getAllUsers = async (req, res) => {
         verificationStatus: status,
         isVerified: status === 'VERIFIED',
         category: u.workerProfile?.primaryCategory?.name || 'N/A',
-        rating: u.workerProfile?.rating ? Number(u.workerProfile.rating) : null,
+        rating: (u.workerProfile?.reviewsCount || 0) > 0 && u.workerProfile?.rating ? Number(u.workerProfile.rating) : null,
         reviewsCount: u.workerProfile?.reviewsCount || 0,
         businessName: u.workerProfile?.businessName || null,
         createdAt: u.createdAt,
@@ -226,12 +217,37 @@ exports.verifyUser = async (req, res) => {
 
     const previousStatus = user.workerProfile?.verificationStatus || user.verificationStatus || 'UNVERIFIED';
 
+    // Worker verification is decided ONLY through the document-review workflow
+    // (/api/admin/worker-verifications). This endpoint can no longer grant a worker VERIFIED or fake a
+    // pending state; it may still withdraw/decline (UNVERIFIED, REJECTED), which keeps the review
+    // record consistent. Non-worker accounts are unaffected.
+    const isWorker = user.role === 'WORKER';
+    if (isWorker && !['UNVERIFIED', 'REJECTED'].includes(requestedStatus)) {
+      await prisma.auditLog.create({
+        data: {
+          userId: req.user.id,
+          action: 'WORKER_DIRECT_VERIFICATION_BLOCKED',
+          entityType: 'USER',
+          entityId: user.id,
+          details: { targetUserId: user.id, targetEmail: user.email, requestedStatus, previousStatus, adminId: req.user.id, adminEmail: req.user.email },
+          ipAddress: req.ip || null,
+          userAgent: req.headers?.['user-agent'] || null
+        }
+      }).catch((e) => console.error('[Admin Controller] audit write failed:', e.message));
+      return res.status(409).json({
+        success: false,
+        code: 'WORKER_VERIFICATION_REQUIRES_REVIEW',
+        message: 'Workers cannot be verified directly. Review their documents under Worker Verification and approve the application there.'
+      });
+    }
+
     // Update user
     const updatedUser = await prisma.user.update({
       where: { id },
       data: {
-        verificationStatus: requestedStatus,
-        ...(requestedStatus === 'VERIFIED' ? { isEmailVerified: true } : {})
+        // Admin identity/profile verification is separate from email-ownership verification,
+        // which is only ever set after the user completes the emailed verification link.
+        verificationStatus: requestedStatus
       }
     });
 
@@ -245,6 +261,21 @@ exports.verifyUser = async (req, res) => {
             ...(req.body.isBackgroundChecked !== undefined ? { isBackgroundChecked: Boolean(req.body.isBackgroundChecked) } : {}),
             ...(req.body.isInsured !== undefined ? { isInsured: Boolean(req.body.isInsured) } : {})
           }
+        });
+      }
+    }
+
+    // Withdrawing a worker's verification also closes their review record so they can resubmit.
+    if (isWorker) {
+      const onboarding = await prisma.workerOnboarding.findUnique({ where: { userId: user.id } });
+      if (onboarding && ['PENDING', 'UNDER_REVIEW', 'VERIFIED'].includes(onboarding.status)) {
+        const reason = (typeof req.body.notes === 'string' && req.body.notes.trim()) || 'Verification was withdrawn by an administrator.';
+        await prisma.workerOnboarding.update({
+          where: { id: onboarding.id },
+          data: { status: 'REJECTED', decisionReason: reason, reviewedAt: new Date(), reviewedById: req.user.id }
+        });
+        await prisma.workerVerificationEvent.create({
+          data: { onboardingId: onboarding.id, actorId: req.user.id, actorRole: 'ADMIN', action: 'VERIFICATION_WITHDRAWN', fromStatus: onboarding.status, toStatus: 'REJECTED', reason }
         });
       }
     }

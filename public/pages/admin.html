@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Governance Console | LocalHire</title>
+    <title>Verification & payments | LocalHire Admin</title>
     <link rel="stylesheet" href="../css/style.css">
+    <link rel="stylesheet" href="../css/payments.css">
     <style>
         .admin-table {
             width: 100%;
@@ -143,6 +144,17 @@
     <div id="navbar-container"></div>
     <div id="toast-container"></div>
 
+    <!-- Worker verification review panel -->
+    <div id="wv-modal" class="modal-overlay" style="overflow-y: auto; padding: 1.5rem;">
+        <div class="modal-content" style="max-width: 860px; max-height: 92vh; overflow-y: auto;">
+            <div class="flex items-center justify-between" style="margin-bottom: 1rem;">
+                <h3 style="margin: 0;">Worker verification review</h3>
+                <button class="btn btn-outline btn-sm" onclick="closeWorkerReview()">Close</button>
+            </div>
+            <div id="wv-body"></div>
+        </div>
+    </div>
+
     <!-- Confirmation & Input Modal -->
     <div id="admin-modal" class="modal-overlay">
         <div class="modal-content">
@@ -157,6 +169,7 @@
     </div>
 
     <main class="container" style="padding: 3rem 1.5rem;">
+        <p style="margin-bottom:1rem;"><a href="admin-console.html" class="btn btn-outline" style="padding:0.4rem 1rem;font-size:0.85rem;">← Admin console (dashboard, workers, customers, bookings, finance, categories, analytics)</a></p>
         <div class="flex items-center justify-between" style="margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
             <div>
                 <h2>Admin Governance Console</h2>
@@ -212,7 +225,72 @@
                 <div>
                     <span class="text-muted" style="font-size: 0.85rem;">Platform Revenue</span>
                     <h3 id="metric-revenue" style="margin: 0; font-size: 1.6rem;">₹0</h3>
-                    <small id="metric-escrow-balance" class="text-muted" style="font-size: 0.75rem;">Escrow: ₹0</small>
+                    <small id="metric-escrow-balance" class="text-muted" style="font-size: 0.75rem;">Held: ₹0</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Payments, refunds and payouts -->
+        <div class="glass-card" style="margin-bottom: 3rem;" id="payments-card">
+            <div class="flex items-center justify-between" style="margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <h3 style="margin-bottom: 0.25rem;">Payments &amp; Payouts</h3>
+                    <span class="text-muted" style="font-size: 0.85rem;">Customer payments, refunds, disputes and what is owed to professionals</span>
+                </div>
+                <div class="flex items-center gap-3" style="flex-wrap: wrap;">
+                    <input id="pm-search" class="input-control" type="search" placeholder="Booking or payment no." aria-label="Search payments" style="width: 190px; padding: 0.45rem 0.85rem; font-size: 0.85rem;">
+                    <select id="pm-state" class="input-control" aria-label="Filter by payment state" style="width: 170px; padding: 0.45rem 0.85rem; font-size: 0.85rem;">
+                        <option value="">All payments</option><option value="CAPTURED">Paid</option><option value="PARTIALLY_REFUNDED">Partly refunded</option>
+                        <option value="REFUNDED">Refunded</option><option value="FAILED">Failed</option><option value="CREATED">Not paid</option>
+                    </select>
+                    <label style="font-size: 0.85rem;"><input type="checkbox" id="pm-disputed"> Disputes only</label>
+                </div>
+            </div>
+            <div id="pm-status" class="pay-note" style="margin-bottom: 1rem;" role="status">Checking payout configuration…</div>
+            <div style="overflow-x: auto;">
+                <table class="admin-table">
+                    <thead><tr><th>Payment</th><th>Customer → Professional</th><th style="text-align:right;">Total</th><th>Payment state</th><th>Worker settlement</th><th style="text-align:right;">Actions</th></tr></thead>
+                    <tbody id="pm-body"><tr><td colspan="6" class="table-loading-state"><div class="spinner"></div><p style="margin-top: 0.75rem;">Loading payments…</p></td></tr></tbody>
+                </table>
+            </div>
+            <div class="flex items-center justify-between" style="margin-top: 1rem;">
+                <span id="pm-page-info" class="text-muted" style="font-size: 0.85rem;"></span>
+                <div class="flex gap-2"><button class="btn btn-outline" id="pm-prev" type="button" style="padding: 0.35rem 0.9rem; font-size: 0.85rem;">Previous</button><button class="btn btn-outline" id="pm-next" type="button" style="padding: 0.35rem 0.9rem; font-size: 0.85rem;">Next</button></div>
+            </div>
+        </div>
+
+        <!-- Worker Verification Queue -->
+        <div class="glass-card" style="margin-bottom: 3rem;" id="worker-verification-card">
+            <div class="flex items-center justify-between" style="margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <h3 style="margin-bottom: 0.25rem;">Worker Verification</h3>
+                    <span class="text-muted" style="font-size: 0.85rem;">Review onboarding applications, identity documents and certificates</span>
+                </div>
+                <div class="flex items-center gap-3" style="flex-wrap: wrap;">
+                    <input type="text" id="wv-search" class="input-control" placeholder="Search name or email..." style="width: 220px; padding: 0.45rem 0.85rem; font-size: 0.85rem;">
+                    <select id="wv-status" class="input-control" style="width: 190px; padding: 0.45rem 0.85rem; font-size: 0.85rem;">
+                        <option value="">Needs action (default)</option>
+                        <option value="PENDING">Pending</option>
+                        <option value="UNDER_REVIEW">Under review</option>
+                        <option value="RESUBMISSION_REQUIRED">Resubmission required</option>
+                        <option value="VERIFIED">Verified</option>
+                        <option value="REJECTED">Rejected</option>
+                        <option value="ALL">All submissions</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" onclick="loadWorkerQueue(1)">Search</button>
+                </div>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="admin-table">
+                    <thead><tr><th>Worker</th><th>Profession</th><th>City</th><th>Status</th><th>Submitted</th><th>Documents</th><th style="text-align: right;">Actions</th></tr></thead>
+                    <tbody id="wv-table-body"><tr><td colspan="7" class="table-loading-state"><div class="spinner"></div><p style="margin-top: 0.75rem;">Loading submissions...</p></td></tr></tbody>
+                </table>
+            </div>
+            <div class="pagination-bar" id="wv-pagination" style="display: none;">
+                <span id="wv-page-info"></span>
+                <div class="flex items-center gap-2">
+                    <button class="btn btn-outline btn-sm" onclick="wvChangePage(-1)">Previous</button>
+                    <button class="btn btn-outline btn-sm" onclick="wvChangePage(1)">Next</button>
                 </div>
             </div>
         </div>
@@ -313,8 +391,10 @@
     </main>
 
     <!-- Load API client first, then main application shell -->
+    <script src="../js/data.js"></script>
     <script src="../js/api.js"></script>
     <script src="../js/app.js"></script>
+    <script src="../js/payments.js"></script>
     <script>
         // State management
         let currentUserPage = 1;
@@ -407,7 +487,7 @@
                 document.getElementById('metric-revenue').textContent = `₹${rev.toLocaleString('en-IN')}`;
                 const escrowHeld = Number(metrics.heldInEscrow || metrics.escrowBalance || 0);
                 document.getElementById('metric-escrow-balance').textContent = 
-                    `Escrow held: ₹${escrowHeld.toLocaleString('en-IN')}`;
+                    `Paid by customers, awaiting completion: ₹${escrowHeld.toLocaleString('en-IN')}`;
 
             } catch (err) {
                 console.error('[Admin] Metrics load failed:', err);
@@ -492,9 +572,17 @@
                             <td><span class="text-muted" style="font-size: 0.8rem;">${createdDate}</span></td>
                             <td style="text-align: right;">
                                 <div class="flex items-center justify-end gap-2">
+                                    ${u.role === 'Worker' ? `
+                                    <button class="btn btn-outline btn-sm" onclick="openWorkerReview('${u.id}')" title="Review this worker's documents and application">
+                                        Review
+                                    </button>
+                                    ${(u.verificationStatus === 'VERIFIED' || u.verificationStatus === 'PENDING_REVIEW') ? `
+                                    <button class="btn btn-outline btn-sm" onclick="promptWithdrawWorker('${u.id}', '${escapeHTML(u.name)}')" title="Withdraw verification">
+                                        Withdraw
+                                    </button>` : ''}` : `
                                     <button class="btn btn-outline btn-sm" onclick="promptVerifyUser('${u.id}', '${escapeHTML(u.name)}', '${u.verificationStatus}')" title="Update Verification">
                                         Verify
-                                    </button>
+                                    </button>`}
                                     <button class="btn btn-outline btn-sm" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.4);" onclick="promptDeleteUser('${u.id}', '${escapeHTML(u.name)}')" title="Delete Account">
                                         Remove
                                     </button>
@@ -564,6 +652,37 @@
                     await window.localHireAPI.verifyAdminUser(userId, status, notes);
                     showToast(`Updated verification status for ${userName} to ${status}`, 'success');
                     loadAdminUsers(currentUserPage);
+                    loadAdminMetrics();
+                }
+            });
+        }
+
+        // Workers are verified only through document review. Withdrawing (never granting) stays available here.
+        function promptWithdrawWorker(userId, userName) {
+            openModal({
+                title: `Withdraw verification for ${userName}`,
+                description: 'The worker disappears from customer search and cannot take new bookings until they are re-approved through document review. Existing bookings are not affected.',
+                customHtml: `
+                    <div class="input-group">
+                        <label class="input-label">New status</label>
+                        <select id="modal-withdraw-status" class="input-control">
+                            <option value="UNVERIFIED">UNVERIFIED</option>
+                            <option value="REJECTED">REJECTED</option>
+                        </select>
+                    </div>
+                    <div class="input-group" style="margin-top: 1rem;">
+                        <label class="input-label">Reason (recorded in the audit log and shown to the worker)</label>
+                        <input type="text" id="modal-withdraw-notes" class="input-control" placeholder="e.g. Documents found to be invalid">
+                    </div>
+                `,
+                onConfirm: async () => {
+                    const status = document.getElementById('modal-withdraw-status').value;
+                    const notes = document.getElementById('modal-withdraw-notes').value.trim();
+                    if (notes.length < 5) throw new Error('Please record a reason.');
+                    await window.localHireAPI.verifyAdminUser(userId, status, notes);
+                    showToast(`Verification withdrawn for ${userName}`, 'success');
+                    loadAdminUsers(currentUserPage);
+                    loadWorkerQueue(1);
                     loadAdminMetrics();
                 }
             });
@@ -721,12 +840,322 @@
         }
 
         // Master loader
+
+        // ── Worker verification ────────────────────────────────────────────────
+        let wvPage = 1;
+        let wvPages = 1;
+        let wvCurrentUser = null;
+        const WV_STATUS = { PENDING: 'Pending', UNDER_REVIEW: 'Under review', VERIFIED: 'Verified', REJECTED: 'Rejected', RESUBMISSION_REQUIRED: 'Resubmission required' };
+        const WV_CHIP = { VERIFIED: 'badge-verified', REJECTED: 'badge-rejected', RESUBMISSION_REQUIRED: 'badge-rejected' };
+        const wvChip = (status) => `<span class="badge ${WV_CHIP[status] || ''}">${escapeHTML(WV_STATUS[status] || status)}</span>`;
+        const wvDate = (d) => d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+        const WV_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+        async function loadWorkerQueue(page = 1) {
+            wvPage = page;
+            const body = document.getElementById('wv-table-body');
+            try {
+                const data = await window.localHireAPI.getWorkerVerifications({
+                    status: document.getElementById('wv-status').value,
+                    q: document.getElementById('wv-search').value.trim(),
+                    page, limit: 10
+                });
+                wvPages = data.pages;
+                if (!data.submissions.length) {
+                    body.innerHTML = '<tr><td colspan="7" class="table-empty-state">No submissions match this filter.</td></tr>';
+                } else {
+                    body.innerHTML = data.submissions.map((s) => `
+                        <tr>
+                            <td><strong>${escapeHTML(s.name)}</strong><br><small class="text-muted">${escapeHTML(s.email)}</small></td>
+                            <td>${escapeHTML(s.category || '—')}</td>
+                            <td>${escapeHTML(s.city || '—')}</td>
+                            <td>${wvChip(s.status)}${s.attemptCount > 1 ? `<br><small class="text-muted">Attempt ${Number(s.attemptCount)}</small>` : ''}</td>
+                            <td>${escapeHTML(wvDate(s.submittedAt))}</td>
+                            <td>${Number(s.documentCount)} file(s)${s.documentsPending ? `<br><small class="text-muted">${Number(s.documentsPending)} to review</small>` : ''}</td>
+                            <td style="text-align: right;"><button class="btn btn-primary btn-sm" data-wv-open="${escapeHTML(s.userId)}">Review</button></td>
+                        </tr>`).join('');
+                    body.querySelectorAll('[data-wv-open]').forEach((b) => b.addEventListener('click', () => openWorkerReview(b.dataset.wvOpen)));
+                }
+                document.getElementById('wv-pagination').style.display = data.total > data.limit ? 'flex' : 'none';
+                document.getElementById('wv-page-info').textContent = `Page ${data.page} of ${data.pages} · ${data.total} submission(s)`;
+            } catch (err) {
+                body.innerHTML = `<tr><td colspan="7" class="table-empty-state" style="color: #ef4444;">${escapeHTML(err.message)}</td></tr>`;
+            }
+        }
+        function wvChangePage(delta) {
+            const next = wvPage + delta;
+            if (next >= 1 && next <= wvPages) loadWorkerQueue(next);
+        }
+
+        function closeWorkerReview() {
+            document.getElementById('wv-modal').style.display = 'none';
+            wvCurrentUser = null;
+        }
+
+        async function openWorkerReview(userId) {
+            wvCurrentUser = userId;
+            document.getElementById('wv-modal').style.display = 'flex';
+            const box = document.getElementById('wv-body');
+            box.innerHTML = '<div class="table-loading-state"><div class="spinner"></div></div>';
+            try {
+                renderWorkerReview(await window.localHireAPI.getWorkerVerification(userId));
+            } catch (err) {
+                box.innerHTML = `<p style="color: #ef4444;">${escapeHTML(err.message)}</p>`;
+            }
+        }
+
+        function renderWorkerReview(s) {
+            const box = document.getElementById('wv-body');
+            const w = s.worker, p = s.profile;
+            const reviewable = s.status === 'PENDING' || s.status === 'UNDER_REVIEW';
+            const kv = (k, v) => `<div><small class="text-muted">${escapeHTML(k)}</small><div>${escapeHTML(v === null || v === undefined || v === '' ? '—' : v)}</div></div>`;
+            const docs = s.documents.map((d) => `
+                <div style="padding: 0.75rem 0; border-bottom: 1px solid var(--border-light); ${d.isCurrent ? '' : 'opacity: 0.55;'}">
+                    <div class="flex items-center justify-between" style="gap: 0.75rem; flex-wrap: wrap;">
+                        <div>
+                            <strong>${escapeHTML(d.typeLabel)}</strong> ${d.isCurrent ? '' : '<small class="text-muted">(replaced / removed by worker)</small>'}
+                            <div class="text-muted" style="font-size: 0.8rem;">${escapeHTML(d.originalName)} · ${(Number(d.sizeBytes) / 1024).toFixed(0)} KB · uploaded ${escapeHTML(wvDate(d.createdAt))}</div>
+                            ${d.rejectionReason ? `<div style="font-size: 0.82rem; color: #b91c1c;">Note: ${escapeHTML(d.rejectionReason)}</div>` : ''}
+                        </div>
+                        <div class="flex items-center gap-2" style="flex-wrap: wrap;">
+                            ${wvChip(d.status)}
+                            <button class="btn btn-outline btn-sm" data-wv-view="${escapeHTML(d.id)}">View securely</button>
+                            ${reviewable && d.isCurrent ? `
+                                <button class="btn btn-primary btn-sm" data-wv-doc="VERIFIED" data-id="${escapeHTML(d.id)}">Verify</button>
+                                <button class="btn btn-outline btn-sm" data-wv-doc="REJECTED" data-id="${escapeHTML(d.id)}">Reject</button>` : ''}
+                        </div>
+                    </div>
+                </div>`).join('') || '<p class="text-muted">No documents.</p>';
+            const history = s.history.map((e) => `
+                <div style="padding: 0.4rem 0; border-bottom: 1px solid var(--border-light); font-size: 0.82rem;">
+                    <strong>${escapeHTML(e.action.replace(/_/g, ' ').toLowerCase())}</strong>
+                    ${e.fromStatus || e.toStatus ? ` · ${escapeHTML(WV_STATUS[e.fromStatus] || '—')} → ${escapeHTML(WV_STATUS[e.toStatus] || '—')}` : ''}
+                    <span class="text-muted"> · ${escapeHTML(e.actorName || e.actorRole)} · ${escapeHTML(wvDate(e.createdAt))}</span>
+                    ${e.reason ? `<div class="text-muted">${escapeHTML(e.reason)}</div>` : ''}
+                </div>`).join('') || '<p class="text-muted">No history.</p>';
+
+            box.innerHTML = `
+                <div class="flex items-center gap-4" style="margin-bottom: 1rem;">
+                    ${w.avatarUrl ? `<img src="${escapeHTML(w.avatarUrl)}" alt="" style="width: 64px; height: 64px; border-radius: 50%; object-fit: cover;">` : ''}
+                    <div><h3 style="margin: 0;">${escapeHTML(w.name)}</h3>
+                        <div class="text-muted" style="font-size: 0.85rem;">${escapeHTML(w.email)} ${w.emailVerified ? '(email verified)' : '(email NOT verified)'} · ${escapeHTML(w.phone || 'no phone')}</div></div>
+                    <div style="margin-left: auto;">${wvChip(s.status)}</div>
+                </div>
+                ${s.decisionReason ? `<div class="text-muted" style="font-size: 0.85rem; margin-bottom: 1rem;">Last decision note: ${escapeHTML(s.decisionReason)}</div>` : ''}
+                ${p ? `
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4" style="margin-bottom: 1rem;">
+                    ${kv('Profession', p.profession)}${kv('Other categories', (p.additionalCategories || []).join(', '))}${kv('Experience', p.experienceYears + ' years')}
+                    ${kv('City / locality', [p.city, p.locality].filter(Boolean).join(', '))}${kv('Service address', p.address)}${kv('Service radius', p.serviceRadiusKm + ' km')}
+                    ${kv('Hourly rate', p.hourlyRate ? '₹' + p.hourlyRate : '')}${kv('Starting charge', p.startingCharge ? '₹' + p.startingCharge : '')}${kv('Languages', (p.languages || []).join(', '))}
+                    ${kv('Skills', (p.skills || []).join(', '))}${kv('Working hours', (p.workingHours || []).map((h) => WV_DAYS[h.dayOfWeek] + ' ' + h.startTime + '-' + h.endTime).join(', '))}${kv('Attempt', s.attemptCount)}
+                </div>
+                <div style="margin-bottom: 1rem;">${kv('Description', p.description)}</div>
+                <div style="margin-bottom: 1rem;">${kv('Previous experience', p.previousExperience)}</div>` : ''}
+                <h4 style="margin: 1rem 0 0.25rem;">Documents</h4>
+                <p class="text-muted" style="font-size: 0.78rem; margin-bottom: 0.25rem;">Documents open through a link that expires in 2 minutes. Every view is recorded in the audit log.</p>
+                ${docs}
+                ${reviewable ? `
+                <div class="flex items-center gap-3" style="margin-top: 1.25rem; flex-wrap: wrap;">
+                    ${s.status === 'PENDING' ? '<button class="btn btn-outline btn-sm" data-wv-act="start">Start review</button>' : ''}
+                    <button class="btn btn-primary btn-sm" data-wv-act="approve" ${s.canApprove ? '' : 'disabled'} title="${escapeHTML(s.approveBlockedReason || 'Approve this worker')}">Approve worker</button>
+                    <button class="btn btn-outline btn-sm" data-wv-act="resubmit">Request resubmission</button>
+                    <button class="btn btn-outline btn-sm" data-wv-act="reject" style="color: #b91c1c;">Reject</button>
+                </div>
+                ${s.canApprove ? '' : `<p class="text-muted" style="font-size: 0.8rem; margin-top: 0.5rem;">${escapeHTML(s.approveBlockedReason || '')}</p>`}` : ''}
+                <h4 style="margin: 1.5rem 0 0.25rem;">Verification history</h4>${history}`;
+
+            // Event wiring (data attributes only; nothing user-controlled is evaluated as code)
+            box.querySelectorAll('[data-wv-view]').forEach((b) => b.addEventListener('click', () => wvViewDocument(b.dataset.wvView)));
+            box.querySelectorAll('[data-wv-doc]').forEach((b) => b.addEventListener('click', () => wvReviewDocument(b.dataset.id, b.dataset.wvDoc, s)));
+            box.querySelectorAll('[data-wv-act]').forEach((b) => b.addEventListener('click', () => wvDecision(b.dataset.wvAct, s)));
+        }
+
+        async function wvViewDocument(docId) {
+            // Open the tab synchronously (popup blockers), then point it at the short-lived signed URL.
+            const tab = window.open('about:blank', '_blank');
+            try {
+                const res = await window.localHireAPI.getWorkerDocumentUrl(wvCurrentUser, docId);
+                if (!tab) { showToast('Allow pop-ups to view documents.', 'error'); return; }
+                tab.opener = null;
+                tab.location.href = res.url;
+            } catch (err) {
+                if (tab) tab.close();
+                showToast(err.message, 'error');
+            }
+        }
+
+        const reasonField = (label, placeholder) => `<label class="input-label" style="font-size: 0.85rem;">${label}</label>
+            <textarea id="wv-reason" class="input-control" rows="3" maxlength="1000" placeholder="${placeholder}"></textarea>`;
+
+        function wvRefresh() {
+            return Promise.all([openWorkerReview(wvCurrentUser), loadWorkerQueue(wvPage), loadAdminMetrics()]);
+        }
+
+        function wvReviewDocument(docId, status, s) {
+            if (status === 'VERIFIED') {
+                window.localHireAPI.reviewWorkerDocument(wvCurrentUser, docId, 'VERIFIED').then(() => { showToast('Document verified', 'success'); return wvRefresh(); }).catch((e) => showToast(e.message, 'error'));
+                return;
+            }
+            openModal({
+                title: 'Reject document',
+                description: 'Explain what is wrong so the worker can fix it.',
+                customHtml: reasonField('Reason (shown to the worker)', 'e.g. The photo is blurred and the name cannot be read.'),
+                onConfirm: async () => {
+                    await window.localHireAPI.reviewWorkerDocument(wvCurrentUser, docId, 'REJECTED', document.getElementById('wv-reason').value);
+                    showToast('Document rejected', 'success');
+                    await wvRefresh();
+                }
+            });
+        }
+
+        function wvDecision(action, s) {
+            const userId = wvCurrentUser;
+            if (action === 'start') {
+                window.localHireAPI.startWorkerReview(userId).then(() => { showToast('Review started', 'success'); return wvRefresh(); }).catch((e) => showToast(e.message, 'error'));
+            } else if (action === 'approve') {
+                openModal({
+                    title: 'Approve worker',
+                    description: `${s.worker.name} will be marked Verified and show the verified badge to customers.`,
+                    customHtml: '<label class="input-label" style="font-size: 0.85rem;">Internal notes (optional)</label><input id="wv-notes" class="input-control" maxlength="500">',
+                    onConfirm: async () => {
+                        await window.localHireAPI.approveWorker(userId, document.getElementById('wv-notes').value);
+                        showToast('Worker verified', 'success');
+                        await wvRefresh();
+                    }
+                });
+            } else if (action === 'reject') {
+                openModal({
+                    title: 'Reject application',
+                    description: 'The worker is told the reason and may correct things and apply again.',
+                    customHtml: reasonField('Reason (shown to the worker)', 'e.g. The identity document does not match the profile name.'),
+                    onConfirm: async () => {
+                        await window.localHireAPI.rejectWorker(userId, document.getElementById('wv-reason').value);
+                        showToast('Application rejected', 'success');
+                        await wvRefresh();
+                    }
+                });
+            } else if (action === 'resubmit') {
+                const current = s.documents.filter((d) => d.isCurrent && d.status !== 'VERIFIED');
+                openModal({
+                    title: 'Request resubmission',
+                    description: 'Ask the worker to correct their application. Tick the documents they must replace.',
+                    customHtml: reasonField('What needs to change', 'e.g. Upload a clearer scan of your PAN card.') + `
+                        <div style="margin-top: 0.75rem; font-size: 0.85rem;">${current.map((d) => `<label style="display: block;"><input type="checkbox" class="wv-doc-flag" value="${escapeHTML(d.id)}"> ${escapeHTML(d.typeLabel)} (${escapeHTML(d.originalName)})</label>`).join('') || '<span class="text-muted">No replaceable documents.</span>'}</div>`,
+                    onConfirm: async () => {
+                        const ids = Array.from(document.querySelectorAll('.wv-doc-flag:checked')).map((i) => i.value);
+                        await window.localHireAPI.requestWorkerResubmission(userId, document.getElementById('wv-reason').value, ids);
+                        showToast('Resubmission requested', 'success');
+                        await wvRefresh();
+                    }
+                });
+            }
+        }
+
+
+        // ── Payments & payouts ──────────────────────────────────────────────────
+        let pmPage = 1; let pmPages = 1; let pmRows = [];
+        async function loadPayments(page = pmPage) {
+            const P = window.LocalHirePayments;
+            pmPage = Math.max(1, page);
+            const qs = new URLSearchParams({ page: pmPage, limit: 10 });
+            const st = document.getElementById('pm-state').value; if (st) qs.set('state', st);
+            const q = document.getElementById('pm-search').value.trim(); if (q) qs.set('q', q);
+            if (document.getElementById('pm-disputed').checked) qs.set('disputed', 'true');
+            const r = await P.call('GET', '/admin/payments?' + qs.toString());
+            const body = document.getElementById('pm-body');
+            if (!r.ok) { body.innerHTML = `<tr><td colspan="6" class="table-loading-state" style="color:#b91c1c;" role="alert">${escapeHTML(r.data.message || 'Could not load payments.')}</td></tr>`; return; }
+            pmRows = r.data.payments; pmPages = r.data.pages;
+            body.innerHTML = pmRows.length ? pmRows.map((p, i) => {
+                const s = p.settlement;
+                const canRefund = ['CAPTURED', 'PARTIALLY_REFUNDED'].includes(p.state) && p.amountRefunded < p.totalAmount;
+                return `<tr>
+                    <td><strong>${escapeHTML(p.paymentNumber)}</strong><br><small class="text-muted">${escapeHTML(p.bookingNumber)} · ${escapeHTML(P.when(p.capturedAt || p.createdAt))}</small></td>
+                    <td>${escapeHTML(p.customer)} → ${escapeHTML(p.worker)}<br><small class="text-muted">${escapeHTML(p.method || '')}</small></td>
+                    <td style="text-align:right;">${P.inr(p.totalAmount)}${p.amountRefunded > 0 ? `<br><small class="text-muted">− ${P.inr(p.amountRefunded)} refunded</small>` : ''}</td>
+                    <td>${P.badge(p.state)}${p.pendingRefund ? ' <span class="pay-badge warn">Refund pending</span>' : ''}${p.disputed ? ' <span class="pay-badge err">Dispute</span>' : ''}</td>
+                    <td>${s ? `${P.settlementBadge(s.status)}<br><small class="text-muted">${P.inr(s.netAmount)}${s.failureReason ? ' · ' + escapeHTML(s.failureReason) : ''}</small>` : '<span class="text-muted">–</span>'}</td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        ${canRefund ? `<button class="btn btn-outline" data-pm="refund" data-i="${i}" type="button" style="padding:0.3rem 0.7rem;font-size:0.8rem;">Refund</button>` : ''}
+                        ${p.disputed ? `<button class="btn btn-primary" data-pm="resolve" data-i="${i}" type="button" style="padding:0.3rem 0.7rem;font-size:0.8rem;">Resolve dispute</button>` : ''}
+                        ${s && s.status === 'FAILED' ? `<button class="btn btn-outline" data-pm="retry" data-i="${i}" type="button" style="padding:0.3rem 0.7rem;font-size:0.8rem;">Retry payout</button>` : ''}
+                    </td></tr>`;
+            }).join('') : '<tr><td colspan="6" class="table-loading-state">No payments match.</td></tr>';
+            document.getElementById('pm-page-info').textContent = `Page ${pmPage} of ${pmPages} · ${r.data.total} payment(s)`;
+            document.getElementById('pm-prev').disabled = pmPage <= 1;
+            document.getElementById('pm-next').disabled = pmPage >= pmPages;
+        }
+
+        async function loadPayoutStatus() {
+            const P = window.LocalHirePayments;
+            const box = document.getElementById('pm-status');
+            const r = await P.call('GET', '/admin/payments/payout-status');
+            if (!r.ok) { box.className = 'pay-note err'; box.textContent = r.data.message || 'Could not read the payout configuration.'; return; }
+            const d = r.data;
+            const parts = [`Razorpay: ${d.razorpayConfigured ? (d.razorpayMode === 'live' ? 'LIVE keys' : 'test-mode keys') : 'NOT configured'}`, `webhook secret ${d.webhookSecretConfigured ? 'set' : 'MISSING'}`];
+            box.className = 'pay-note ' + (d.razorpayConfigured && d.webhookSecretConfigured ? 'info' : 'warn');
+            box.innerHTML = escapeHTML(parts.join(' · ')) + '<br>' + (d.routeEnabledInConfig
+                ? 'Payout mode: <b>Razorpay Route</b>. Professionals are paid through linked accounts (unverified against live Razorpay).'
+                : 'Payout mode: <b>ledger only</b>. Earnings are recorded as owed to professionals; no payouts are made or simulated by LocalHire.');
+        }
+
+        function pmWire() {
+            const P = window.LocalHirePayments;
+            const reload = () => { loadPayments(pmPage); loadAdminMetrics(); };
+            document.getElementById('pm-state').addEventListener('change', () => loadPayments(1));
+            document.getElementById('pm-disputed').addEventListener('change', () => loadPayments(1));
+            document.getElementById('pm-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadPayments(1); });
+            document.getElementById('pm-prev').addEventListener('click', () => loadPayments(pmPage - 1));
+            document.getElementById('pm-next').addEventListener('click', () => loadPayments(pmPage + 1));
+            document.getElementById('pm-body').addEventListener('click', async (e) => {
+                const b = e.target.closest('[data-pm]');
+                if (!b) return;
+                const row = pmRows[Number(b.dataset.i)];
+                const remaining = Math.round((row.totalAmount - row.amountRefunded) * 100) / 100;
+                if (b.dataset.pm === 'refund') {
+                    const a = await P.ask({
+                        title: `Refund ${row.paymentNumber}`, message: `Up to ${P.inr(remaining)} can be refunded to ${P.esc(row.customer)}. Leave the amount empty to refund everything that remains. The professional's earnings are reduced accordingly.`,
+                        confirmText: 'Issue refund', danger: true,
+                        input: { label: 'Reason (recorded in the audit log)', multiline: true, maxLength: 300, validate: (v) => (v.trim().length < 5 ? 'Please give a reason.' : null) }
+                    });
+                    if (!a.confirmed) return;
+                    const amt = await P.ask({ title: 'Refund amount (₹)', message: 'Leave empty for the full remaining amount.', confirmText: 'Continue', input: { label: 'Amount', type: 'number', min: 1, step: '0.01', value: '', validate: (v) => (v !== '' && !(Number(v) > 0 && Number(v) <= remaining) ? `Enter an amount up to ${remaining}.` : null) } });
+                    if (!amt.confirmed) return;
+                    const r = await P.call('POST', `/admin/payments/${row.id}/refund`, { reason: a.value.trim(), ...(amt.value !== '' ? { amount: Number(amt.value) } : {}) });
+                    showToast(r.ok ? `Refund ${r.data.refund.status.toLowerCase()}.` : (r.data.message || 'Refund failed'), r.ok ? 'success' : 'error');
+                    reload();
+                } else if (b.dataset.pm === 'resolve') {
+                    const d = await P.ask({ title: `Resolve dispute on ${row.paymentNumber}`, message: 'Type one decision: <b>release</b> (pay the professional), <b>refund</b> (full refund to the customer) or <b>partial</b> (refund part, pay the rest).', confirmText: 'Next',
+                        input: { label: 'Decision', value: 'release', validate: (v) => (!['release', 'refund', 'partial'].includes(v.trim().toLowerCase()) ? 'Enter release, refund or partial.' : null) } });
+                    if (!d.confirmed) return;
+                    const decision = { release: 'RELEASE_TO_WORKER', refund: 'REFUND_FULL', partial: 'REFUND_PARTIAL' }[d.value.trim().toLowerCase()];
+                    let amount;
+                    if (decision === 'REFUND_PARTIAL') {
+                        const am = await P.ask({ title: 'Refund amount (₹)', confirmText: 'Next', input: { label: 'Amount to refund', type: 'number', min: 1, step: '0.01', validate: (v) => (!(Number(v) > 0 && Number(v) < row.totalAmount) ? `Enter an amount below ${row.totalAmount}.` : null) } });
+                        if (!am.confirmed) return; amount = Number(am.value);
+                    }
+                    const why = await P.ask({ title: 'Reason for the decision', confirmText: 'Resolve dispute', danger: decision !== 'RELEASE_TO_WORKER', input: { label: 'Reason (shown in the audit log)', multiline: true, maxLength: 400, validate: (v) => (v.trim().length < 5 ? 'Please give a reason.' : null) } });
+                    if (!why.confirmed) return;
+                    const r = await P.call('POST', `/admin/payments/${row.id}/resolve-dispute`, { decision, amount, reason: why.value.trim() });
+                    showToast(r.ok ? 'Dispute resolved.' : (r.data.message || 'Could not resolve the dispute'), r.ok ? 'success' : 'error');
+                    reload();
+                } else if (b.dataset.pm === 'retry') {
+                    b.disabled = true;
+                    const r = await P.call('POST', `/admin/settlements/${row.settlement.id}/retry`);
+                    showToast(r.ok ? (r.data.result.dispatched ? 'Payout re-sent.' : 'Payout still failing: ' + (r.data.result.error || r.data.result.reason)) : (r.data.message || 'Retry failed'), r.ok && r.data.result.dispatched ? 'success' : 'error');
+                    reload();
+                }
+            });
+        }
+
         async function loadAllAdminData() {
             if (!checkAdminAuth()) return;
             await Promise.all([
                 loadAdminMetrics(),
                 loadAdminUsers(1),
-                loadAdminJobs()
+                loadAdminJobs(),
+                loadWorkerQueue(1),
+                loadPayments(1),
+                loadPayoutStatus()
             ]);
         }
 
@@ -741,12 +1170,18 @@
                 });
             }
 
+            const wvSearch = document.getElementById('wv-search');
+            if (wvSearch) wvSearch.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadWorkerQueue(1); });
+            const wvStatus = document.getElementById('wv-status');
+            if (wvStatus) wvStatus.addEventListener('change', () => loadWorkerQueue(1));
+
             // Listen for role filter change
             const roleFilter = document.getElementById('user-role-filter');
             if (roleFilter) {
                 roleFilter.addEventListener('change', () => applyUserFilter());
             }
 
+            pmWire();
             loadAllAdminData();
         });
     </script>
