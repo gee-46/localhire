@@ -23,7 +23,10 @@ test('createBooking accepts a valid request from the authenticated customer only
   const originalServiceFindUnique = prisma.serviceItem.findUnique;
   const originalBookingFindFirst = prisma.booking.findFirst;
   const originalTransaction = prisma.$transaction;
+  const originalProfileFindUnique = prisma.workerProfile.findUnique;
 
+  // Bookings require an approved (VERIFIED) worker; see worker-gating.test.js for the unverified cases.
+  prisma.workerProfile.findUnique = async () => ({ verificationStatus: 'VERIFIED', user: { isActive: true, role: 'WORKER' } });
   prisma.user.findUnique = async ({ where }) => {
     if (where.id === 'worker-1') {
       return { id: 'worker-1', role: 'WORKER', name: 'Worker One' };
@@ -72,6 +75,7 @@ test('createBooking accepts a valid request from the authenticated customer only
     prisma.serviceItem.findUnique = originalServiceFindUnique;
     prisma.booking.findFirst = originalBookingFindFirst;
     prisma.$transaction = originalTransaction;
+    prisma.workerProfile.findUnique = originalProfileFindUnique;
   }
 });
 
@@ -79,6 +83,8 @@ test('createBooking rejects invalid workers, invalid pricing, and unavailable se
   const originalUserFindUnique = prisma.user.findUnique;
   const originalServiceFindUnique = prisma.serviceItem.findUnique;
   const originalBookingFindFirst = prisma.booking.findFirst;
+  const originalProfileFindUnique = prisma.workerProfile.findUnique;
+  prisma.workerProfile.findUnique = async () => ({ verificationStatus: 'VERIFIED', user: { isActive: true, role: 'WORKER' } });
   prisma.user.findUnique = async () => null;
   prisma.serviceItem.findUnique = async () => null;
   prisma.booking.findFirst = async () => null;
@@ -117,6 +123,7 @@ test('createBooking rejects invalid workers, invalid pricing, and unavailable se
     prisma.user.findUnique = originalUserFindUnique;
     prisma.serviceItem.findUnique = originalServiceFindUnique;
     prisma.booking.findFirst = originalBookingFindFirst;
+    prisma.workerProfile.findUnique = originalProfileFindUnique;
   }
 });
 
@@ -145,7 +152,7 @@ test('updateBookingStatus rejects unauthorized customer actions and invalid tran
     const invalidTransitionReq = {
       user: { id: 'worker-1', role: 'Worker' },
       params: { id: 'booking-2' },
-      body: { status: 'AWAITING_CUSTOMER_CONFIRMATION', notes: 'not allowed' }
+      body: { status: 'DISPATCHED', notes: 'cannot dispatch an in-progress job' }
     };
     const invalidTransitionRes = createMockResponse();
     await bookingController.updateBookingStatus(invalidTransitionReq, invalidTransitionRes);

@@ -146,3 +146,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-10T15:15:33+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Implemented review validation service preventing fake customer reviews, calculating rolling star ratings, and handling review flags.
+
+### [2026-11-10] test(reviews): add automated test coverage for review lifecycle and trust rules
+- **Date:** 2026-11-10T20:05:47+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added comprehensive test suite covering review eligibility, rating recalculation, and end-to-end booking state machine transitions.
