@@ -141,3 +141,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-10T10:50:12+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Created database migration 20261110000000_reviews_trust_moderation for review moderation statuses, dispute flags, and sentiment tracking.
+
+### [2026-11-10] feat(reviews): implement review moderation, rating updates, and fraud prevention
+- **Date:** 2026-11-10T15:15:33+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Implemented review validation service preventing fake customer reviews, calculating rolling star ratings, and handling review flags.
