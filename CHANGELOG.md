@@ -136,3 +136,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-09T18:40:40+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Built full-featured administrative console with system metrics, dispute resolution tools, and user account management.
+
+### [2026-11-10] feat(db): add reviews trust moderation schema migration
+- **Date:** 2026-11-10T10:50:12+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Created database migration 20261110000000_reviews_trust_moderation for review moderation statuses, dispute flags, and sentiment tracking.
