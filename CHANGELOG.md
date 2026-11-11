@@ -151,3 +151,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-10T20:05:47+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added comprehensive test suite covering review eligibility, rating recalculation, and end-to-end booking state machine transitions.
+
+### [2026-11-11] feat(admin): implement worker KYC verification and administrative approval workflow
+- **Date:** 2026-11-11T11:20:05+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Implemented administrative KYC verification controller allowing admins to approve or reject submitted worker documents with feedback.
