@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Worker Dashboard | LocalHire</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="stylesheet" href="../css/payments.css">
+    <link rel="stylesheet" href="../css/comm.css">
+    <link rel="stylesheet" href="../css/tracking.css">
+    <style>
+        .stat { font-size: 1.6rem; font-weight: 700; margin: 0; }
+        .stat-label { font-size: 0.8rem; color: var(--text-muted); }
+        .bar { height: 8px; border-radius: 9999px; background: rgba(0,0,0,0.08); overflow: hidden; }
+        .bar > div { height: 100%; background: var(--primary); }
+        .row-item { padding: 0.7rem 0; border-bottom: 1px solid var(--border-light); font-size: 0.9rem; }
+        .row-item:last-child { border-bottom: none; }
+        .chip { font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.6rem; border-radius: 9999px; border: 1px solid var(--border-light); }
+        .chip.VERIFIED { background: rgba(110,231,183,0.25); color: #065f46; border-color: rgba(110,231,183,0.6); }
+        .chip.REJECTED, .chip.RESUBMISSION_REQUIRED { background: rgba(239,68,68,0.12); color: #b91c1c; border-color: rgba(239,68,68,0.4); }
+        .chip.PENDING, .chip.UNDER_REVIEW { background: rgba(250,204,21,0.18); color: #854d0e; border-color: rgba(250,204,21,0.5); }
+        .empty { color: var(--text-muted); font-size: 0.9rem; }
+        .check-done { color: #10b981; }
+        .check-todo { color: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <div id="navbar-container"></div>
+
+    <main class="container animate-fade-in" style="padding: 2.5rem 1.5rem;">
+        <div id="push-banner"></div>
+        <div id="loading" class="glass-card" style="text-align:center; padding:3rem;">Loading your dashboard…</div>
+        <div id="content" style="display:none;"></div>
+    </main>
+
+    <script src="../js/data.js"></script>
+    <script src="../js/api.js"></script>
+    <script src="../js/app.js"></script>
+    <script src="../js/payments.js"></script>
+    <script src="../js/notifications.js"></script>
+    <script src="../js/tracking.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+        renderNavbar('navbar-container', 'pages');
+        const user = window.localHireApp.getCurrentUser();
+        if (!user) { window.location.href = 'auth.html'; return; }
+        if (user.role !== 'Worker') { window.location.href = '../index.html'; return; }
+
+        const e = escapeHTML;
+        const money = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+        const when = (d) => new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+        const day = (d) => new Date(d).toLocaleDateString('en-IN', { dateStyle: 'medium' });
+        const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const STATUS_TEXT = { PENDING: 'Pending review', UNDER_REVIEW: 'Under review', VERIFIED: 'Verified', REJECTED: 'Rejected', RESUBMISSION_REQUIRED: 'Resubmission required' };
+
+        // Reviews received: published ones count towards the rating; a professional can report an abusive or false review,
+        // but cannot edit or delete any review. Removed reviews appear only as a placeholder.
+        const REPORT_REASONS = { ABUSIVE: 'Abusive or hateful language', FAKE_OR_FRAUDULENT: 'Fake or fraudulent (not a real customer or job)', NOT_MY_CUSTOMER: 'This was not my customer', PRIVATE_INFORMATION: 'Contains private information', OTHER: 'Something else' };
+        const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
+        async function initReviews() {
+            const box = document.getElementById('rev-box');
+            if (!box) return;
+            let page = 1; let state = null;
+            const card = (x) => x.state === 'HIDDEN'
+                ? `<div class="row-item" data-review="${e(x.id)}"><span class="chip">Removed</span> <span class="text-muted" style="font-size:0.85rem;">${e(x.hiddenNote)}</span></div>`
+                : `<div class="row-item" data-review="${e(x.id)}"><div class="flex justify-between"><strong>${e(x.reviewerName || 'Customer')}</strong><span role="img" aria-label="${Number(x.rating)} out of 5">${stars(Number(x.rating))}</span></div>
+                    <div style="font-size:0.85rem; white-space:pre-line;">${e(x.comment)}</div>
+                    <div class="flex justify-between items-center" style="margin-top:0.35rem; gap:0.5rem; flex-wrap:wrap;"><span class="text-muted" style="font-size:0.75rem;">${e(new Date(x.createdAt).toLocaleDateString('en-IN', { dateStyle: 'medium' }))} · verified booking</span>
+                    ${x.report ? `<span class="chip ${x.report.status === 'OPEN' ? 'PENDING' : ''}">${x.report.status === 'OPEN' ? 'Reported: under review' : x.report.status === 'UPHELD' ? 'Report upheld' : 'Report reviewed: stays published'}</span>`
+                        : `<button type="button" class="btn btn-outline" style="padding:0.2rem 0.6rem; font-size:0.75rem;" data-report="${e(x.id)}">Report this review</button>`}</div></div>`;
+            const paint = (more) => {
+                const sum = state.summary;
+                box.innerHTML = (sum.count ? `<div class="stat">${Number(sum.average).toFixed(1)} ★ <span class="stat-label">${sum.count} ${sum.count === 1 ? 'review' : 'reviews'} count towards your rating</span></div>` : '<p class="empty">No reviews yet. They appear here after customers rate completed jobs. No rating is shown until then.</p>')
+                    + `<div id="rev-items">${state.items.map(card).join('')}</div>`
+                    + (state.page < state.pages ? '<button type="button" class="btn btn-outline" id="rev-more" style="margin-top:0.75rem;">Show more</button>' : '')
+                    + '<p class="text-muted" style="font-size:0.75rem; margin-top:0.75rem;">Reviews cannot be edited or deleted. If one is abusive or false, report it and a LocalHire moderator will decide.</p><p id="rev-msg" role="status" class="text-muted" style="font-size:0.8rem;"></p>';
+                const mb = document.getElementById('rev-more');
+                if (mb) mb.addEventListener('click', async () => { mb.disabled = true; try { const r = await window.localHireAPI.getReceivedReviews({ page: state.page + 1, limit: 5 }); state.items = state.items.concat(r.reviews); state.page = r.page; state.pages = r.pages; paint(); } catch (err) { mb.disabled = false; document.getElementById('rev-msg').textContent = 'Could not load more: ' + err.message; } });
+            };
+            const load = async () => {
+                try { const r = await window.localHireAPI.getReceivedReviews({ page: 1, limit: 5 }); state = { items: r.reviews, summary: r.summary, page: r.page, pages: r.pages }; paint(); }
+                catch (err) { box.insertAdjacentHTML('beforeend', `<p class="text-muted" style="font-size:0.8rem;" role="alert">Could not load all reviews: ${e(err.message)}</p>`); }
+            };
+            box.addEventListener('click', (ev) => {
+                const btn = ev.target.closest('[data-report]');
+                if (!btn) return;
+                const P = window.LocalHirePayments; const id = btn.getAttribute('data-report');
+                const dlg = P.dialog(`<button class="pay-x" type="button" aria-label="Close" data-x>&times;</button>
+                    <h3 id="pay-title">Report this review</h3>
+                    <p class="pay-sub">Tell us what is wrong. The review stays visible until a moderator decides. You cannot edit or delete it yourself.</p>
+                    <label class="pay-field"><span>Reason</span><select id="rr-reason">${Object.entries(REPORT_REASONS).map(([k, v]) => `<option value="${k}">${e(v)}</option>`).join('')}</select></label>
+                    <label class="pay-field"><span>Details</span><textarea id="rr-details" maxlength="1000" placeholder="Explain what is false or abusive about this review"></textarea></label>
+                    <small id="rr-err" class="pay-sub" style="color:#b42318" role="alert"></small>
+                    <div class="pay-actions"><button class="pay-btn ghost" type="button" data-x>Cancel</button><button class="pay-btn primary" type="button" id="rr-go">Send report</button></div>`);
+                dlg.el.addEventListener('click', async (e2) => {
+                    if (e2.target.closest('[data-x]')) return dlg.close('x');
+                    if (!e2.target.closest('#rr-go')) return;
+                    const go = dlg.el.querySelector('#rr-go'); go.disabled = true; go.textContent = 'Sending…';
+                    try {
+                        const r = await window.localHireAPI.reportReview(id, dlg.el.querySelector('#rr-reason').value, dlg.el.querySelector('#rr-details').value);
+                        dlg.close('sent'); await load(); const m = document.getElementById('rev-msg'); if (m) m.textContent = r.message;
+                    } catch (err) { go.disabled = false; go.textContent = 'Send report'; dlg.el.querySelector('#rr-err').textContent = err.message; if (err.status === 409) { dlg.close('dup'); load(); } }
+                });
+            });
+            await load();
+        }
+
+        let d;
+        try {
+            d = await window.localHireAPI.getWorkerDashboard();
+        } catch (err) {
+            document.getElementById('loading').textContent = 'Could not load the dashboard: ' + err.message;
+            if (err.status === 401) setTimeout(() => { window.location.href = 'auth.html'; }, 1200);
+            return;
+        }
+
+        const v = d.verification;
+        const status = v.status || (v.isVerified ? 'VERIFIED' : null);
+        let verificationHtml;
+        if (!status) {
+            verificationHtml = `<p class="empty">You have not submitted your identity documents yet. Verified workers earn customer trust and a badge on their profile.</p>
+                <a class="btn btn-primary" href="worker-onboarding.html">${d.hasProfile ? 'Start verification' : 'Complete onboarding'}</a>`;
+        } else if (status === 'VERIFIED') {
+            verificationHtml = `<p>Your profile is verified. Customers see a <span class="badge badge-verified">✓ Verified</span> badge next to your name.</p>`;
+        } else if (status === 'PENDING' || status === 'UNDER_REVIEW') {
+            verificationHtml = `<p class="empty">Submitted ${v.submittedAt ? e(day(v.submittedAt)) : ''}. Our team is reviewing your documents. You will be notified of the outcome.</p>`;
+        } else {
+            verificationHtml = `<p style="color:#b91c1c;"><strong>${status === 'REJECTED' ? 'Not approved:' : 'Changes needed:'}</strong> ${e(v.reason || '')}</p>
+                <a class="btn btn-primary" href="worker-onboarding.html">Update and resubmit</a>`;
+        }
+        const docsHtml = v.documents.length
+            ? v.documents.map((x) => `<div class="row-item flex justify-between items-center"><span>${e(x.typeLabel)}</span><span class="chip ${e(x.status)}">${e(STATUS_TEXT[x.status] || x.status)}</span></div>
+                ${x.rejectionReason ? `<div class="row-item" style="color:#b91c1c; font-size:0.82rem;">${e(x.rejectionReason)}</div>` : ''}`).join('')
+            : '<p class="empty">No documents uploaded.</p>';
+
+        const missing = d.completion.items.filter((i) => !i.done);
+        const completionHtml = `
+            <div class="flex justify-between" style="margin-bottom:0.5rem;"><strong>${d.completion.percent}% complete</strong>
+                ${missing.length ? '<a href="worker-onboarding.html" style="font-size:0.85rem;">Finish setup</a>' : ''}</div>
+            <div class="bar"><div style="width:${d.completion.percent}%"></div></div>
+            <div style="margin-top:0.9rem; font-size:0.85rem;">${d.completion.items.map((i) => `<div class="${i.done ? 'check-done' : 'check-todo'}">${i.done ? '✓' : '○'} ${e(i.label)}</div>`).join('')}</div>`;
+
+        const prof = d.profession;
+        const hours = d.availability.workingHours;
+        const professionHtml = prof
+            ? `<div class="stat" style="font-size:1.3rem;">${e(prof.primary || '—')}</div>
+               <div class="stat-label">${prof.experienceYears} year(s) experience${prof.city ? ' · ' + e(prof.city) + (prof.locality ? ', ' + e(prof.locality) : '') : ''}</div>`
+            : '<p class="empty">Your profession will appear here once you complete onboarding.</p>';
+        const availabilityHtml = hours.length
+            ? hours.map((h) => `<div class="row-item flex justify-between"><span>${DAYS[h.dayOfWeek]}</span><span>${e(h.startTime)} – ${e(h.endTime)}</span></div>`).join('')
+            : '<p class="empty">No working hours set.</p>';
+
+        const bookingList = (items, emptyText) => items.length
+            ? items.map((b) => `<div class="row-item"><div class="flex justify-between"><strong>${e(b.customerName || 'Customer')}</strong><span>${money(b.agreedPrice)}</span></div>
+                <div class="text-muted" style="font-size:0.8rem;">${e(b.service || 'Service booking')} · ${e(when(b.scheduledAt))} · ${e(b.status)}</div></div>`).join('')
+            : `<p class="empty">${emptyText}</p>`;
+
+        const jobsHtml = d.jobRequests.recent.length
+            ? d.jobRequests.recent.map((j) => `<div class="row-item"><strong>${e(j.title)}</strong>
+                <div class="text-muted" style="font-size:0.8rem;">${j.budgetMax ? money(j.budgetMin) + ' – ' + money(j.budgetMax) : 'Budget flexible'} · ${e(j.urgency)}</div></div>`).join('')
+            : '<p class="empty">No open jobs in your categories right now.</p>';
+
+        const r = d.reviews;
+        const reviewsHtml = r.count
+            ? `<div class="stat">${Number(r.average).toFixed(1)} ★ <span class="stat-label">${r.count} review(s)</span></div>` + r.recent.map((x) => `<div class="row-item"><div class="flex justify-between"><strong>${e(x.customerName || 'Customer')}</strong><span>${'★'.repeat(x.rating)}${'☆'.repeat(5 - x.rating)}</span></div>
+                <div class="text-muted" style="font-size:0.85rem;">${e(x.comment)}</div></div>`).join('')
+            : '<p class="empty">No reviews yet. They appear here after customers rate completed jobs.</p>';
+
+        document.getElementById('content').innerHTML = `
+            <div class="flex items-center justify-between" style="margin-bottom:1.5rem; flex-wrap:wrap; gap:1rem;">
+                <div class="flex items-center gap-4">
+                    ${d.worker.avatarUrl ? `<img src="${e(d.worker.avatarUrl)}" alt="" style="width:60px;height:60px;border-radius:50%;object-fit:cover;border:2px solid var(--primary);">` : ''}
+                    <div><h2 style="margin:0;">Welcome, ${e((d.worker.name || '').split(' ')[0])}</h2>
+                    <span class="chip ${e(status || '')}">${e(status ? STATUS_TEXT[status] : 'Not verified')}</span></div>
+                </div>
+                <div class="flex gap-3" style="flex-wrap:wrap"><a class="btn btn-outline" href="chat.html" style="position:relative">Messages<span class="cm-badge" id="wd-chat-n" hidden style="position:absolute;top:-8px;right:-8px"></span></a><a class="btn btn-outline" href="notifications.html">Notifications</a><a class="btn btn-outline" href="edit-profile.html">Edit profile</a><a class="btn btn-primary" href="jobs.html">Find work</a></div>
+            </div>
+
+            ${v.isVerified ? '' : `<div class="glass-card" style="margin-bottom:1.5rem; border:1px solid rgba(250,204,21,0.5); background:rgba(250,204,21,0.08);">
+                <strong>You are not visible to customers yet.</strong>
+                <span class="text-muted"> Only workers with approved identity verification appear in search and can receive new bookings or send quotes. Your onboarding and any existing bookings stay available.</span>
+                ${(!status || status === 'REJECTED' || status === 'RESUBMISSION_REQUIRED') ? ' <a href="worker-onboarding.html">Continue verification →</a>' : ''}
+            </div>`}
+
+            <section id="earnings-section" aria-labelledby="earnings-h" style="margin-bottom:1.5rem;">
+                <h3 id="earnings-h" style="margin-bottom:0.75rem;">Earnings</h3>
+                <div id="earnings-body"><div class="glass-card empty">Loading your earnings…</div></div>
+            </section>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6" style="margin-bottom:1.5rem;">
+                <div class="glass-card"><h3>Verification</h3>${verificationHtml}<h4 style="margin-top:1.25rem;">Documents</h4>${docsHtml}</div>
+                <div class="glass-card"><h3>Profile completion</h3>${completionHtml}</div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6" style="margin-bottom:1.5rem;">
+                <div class="glass-card"><h3>Profession</h3>${professionHtml}
+                    <h4 style="margin-top:1.25rem;">Availability</h4>
+                    <p class="text-muted" style="font-size:0.85rem;">Live status: ${d.availability.liveAvailable ? 'sharing location and available' : 'not currently available'}</p>${availabilityHtml}</div>
+                <div class="glass-card" id="reviews" style="scroll-margin-top:90px;"><h3>Reviews</h3><div id="rev-box">${reviewsHtml}</div></div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="glass-card"><h3>Upcoming bookings</h3>${bookingList(d.upcomingBookings, 'No upcoming bookings.')}
+                    <h4 style="margin-top:1.25rem;">Booking requests awaiting you</h4>${bookingList(d.bookingRequests, 'No pending booking requests.')}
+                    <a href="my-jobs.html" style="font-size:0.85rem;">Open full bookings →</a></div>
+                <div class="glass-card"><h3>Job requests</h3>
+                    <p class="text-muted" style="font-size:0.85rem;">${d.jobRequests.openMatchingCount} open job(s) match your categories.</p>${jobsHtml}
+                    <a href="jobs.html" style="font-size:0.85rem;">Browse all jobs →</a></div>
+            </div>
+
+            ${d.hasProfile ? `
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6" style="margin-top:1.5rem;">
+                <div class="glass-card" id="online-card"><h3>Customer visibility</h3>
+                    <p class="text-muted" style="font-size:0.85rem;">Customers only see verified professionals who are online. Going online shares your <strong>approximate</strong> area (never your exact position) so you appear in searches near you.</p>
+                    <p id="online-status" style="margin:0.75rem 0;" role="status" aria-live="polite"><strong>Checking…</strong></p>
+                    <div class="tk-gps" id="online-gps" style="margin-bottom:0.75rem;"></div>
+                    <button class="btn btn-primary" id="online-toggle" type="button" ${v.isVerified ? '' : 'disabled'}>…</button>
+                    <p id="online-msg" class="text-muted" style="font-size:0.8rem; margin-top:0.5rem;" role="alert">${v.isVerified ? 'Keep this page open while you are online: your location is refreshed every few minutes. If it stops (page closed, phone asleep, no signal) you disappear from search after 15 minutes. Travelling to a booking? Use the journey page: it is separate and only shares with that customer.' : 'You can go online once your verification is approved.'}</p></div>
+                <div class="glass-card" id="portfolio-card"><h3>Portfolio photos</h3>
+                    <p class="text-muted" style="font-size:0.85rem;">Show customers your real work (up to 12 photos, JPG/PNG/WebP, 5 MB each). Only photos you upload appear on your public profile.</p>
+                    <div id="portfolio-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:0.5rem; margin:0.75rem 0;"></div>
+                    <div class="flex gap-2 items-center" style="flex-wrap:wrap;">
+                        <input type="text" id="portfolio-caption" class="input-control" maxlength="120" placeholder="Caption (optional)" style="flex:1; min-width:160px;">
+                        <label class="btn btn-outline" for="portfolio-file" style="cursor:pointer;">Add photo</label>
+                        <input type="file" id="portfolio-file" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>
+                    <p id="portfolio-msg" class="text-muted" style="font-size:0.8rem; margin-top:0.5rem;"></p></div>
+            </div>` : ''}`;
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = 'block';
+        initReviews();
+        if (window.location.hash === '#reviews') { const rv = document.getElementById('reviews'); if (rv) rv.scrollIntoView(); }
+
+        // unread messages badge + quiet browser-notification opt-in
+        if (window.LocalHireNotify) {
+            const N = window.LocalHireNotify; const chip = document.getElementById('wd-chat-n');
+            const paint = () => { chip.hidden = !N.state.chatUnread; chip.textContent = N.state.chatUnread > 9 ? '9+' : String(N.state.chatUnread); };
+            N.on('chatUnread', paint); N.connect(); N.refreshCounts().then(paint);
+            N.maybeShowPushBanner(document.getElementById('push-banner'));
+        }
+
+        // ── Earnings (every figure comes from the server's settlement records) ──
+        (async () => {
+            const P = window.LocalHirePayments;
+            const body = document.getElementById('earnings-body');
+            const load = async () => {
+                const r = await P.call('GET', '/worker/earnings');
+                if (!r.ok) { body.innerHTML = `<div class="glass-card" style="color:#b91c1c;" role="alert">${e(r.data.message || 'Your earnings could not be loaded.')}</div>`; return; }
+                const x = r.data; const s = x.summary;
+                const stat = (value, label, hint) => `<div class="pay-stat"><b>${P.inr(value)}</b><span>${label}</span>${hint ? `<small>${hint}</small>` : ''}</div>`;
+                const cards = [
+                    stat(s.totalEarnings, 'Total earnings', 'Jobs the customer confirmed, after commission and refunds'),
+                    stat(s.availableBalance, 'Available balance', x.payoutRail === 'NONE' ? 'Confirmed and owed to you; not yet transferred' : 'Confirmed, waiting to be paid out'),
+                    stat(s.pendingSettlements, 'Pending settlements', 'Customer paid, waiting for confirmation or payout'),
+                    `<div class="pay-stat"><b>${s.completedJobs}</b><span>Completed jobs</span><small>Confirmed by the customer</small></div>`,
+                    stat(s.platformCommission, 'Platform commission', 'Deducted by LocalHire'),
+                    stat(s.refundAdjustments, 'Refund adjustments', 'Earnings reduced by refunds'),
+                    stat(s.paidOut, 'Paid out', 'Settled to your bank by the payment provider')
+                ];
+                if (s.onHold > 0) cards.push(stat(s.onHold, 'On hold', 'Dispute under review'));
+                if (s.failedPayouts > 0) cards.push(stat(s.failedPayouts, 'Failed payouts', 'LocalHire has been alerted'));
+
+                const rail = x.payoutRail === 'NONE'
+                    ? `<div class="pay-note info"><b>How you get paid.</b> LocalHire records exactly what you have earned, but automatic bank payouts are <b>not switched on</b> for this platform yet. "Available balance" is confirmed money that is owed to you; nothing here is shown as paid until a payout has really happened. Contact LocalHire support to arrange settlement.</div>`
+                    : `<div class="pay-note ${x.payoutAccount.status === 'ACTIVATED' ? 'ok' : 'warn'}" id="payout-account-note"><b>Payout account:</b> ${e(({ NOT_STARTED: 'not set up yet', CREATED: 'submitted', UNDER_REVIEW: 'under review by Razorpay', NEEDS_CLARIFICATION: 'more information needed', ACTIVATED: 'active', SUSPENDED: 'suspended' })[x.payoutAccount.status] || x.payoutAccount.status)}${x.payoutAccount.bankLast4 ? ` · bank account ending ${e(x.payoutAccount.bankLast4)}` : ''}
+                        ${x.payoutAccount.status !== 'ACTIVATED' ? '<br>Customers cannot pay for your bookings until your payout account is active.' : ''}
+                        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">${x.payoutAccount.status !== 'ACTIVATED' ? '<button type="button" class="pay-btn primary sm" id="payout-setup">Set up payouts</button>' : ''}${x.payoutAccount.status !== 'NOT_STARTED' ? '<button type="button" class="pay-btn ghost sm" id="payout-refresh">Refresh status</button>' : ''}</div></div>`;
+
+                const rows = x.settlements.map((t) => `<tr><td>${e(t.bookingNumber || '')}<br><small class="text-muted">${e(t.service)}</small></td><td>${e(t.customerName)}</td><td class="num">${P.inr(t.serviceAmount)}</td><td class="num">${P.inr(t.commission)}</td><td class="num">${t.refundAdjustment ? '− ' + P.inr(t.refundAdjustment) : '–'}</td><td class="num"><b>${P.inr(t.netAmount)}</b></td><td>${P.settlementBadge(t.status)}</td></tr>`).join('');
+                const hist = x.payoutHistory.map((t) => `<tr><td>${e(t.bookingNumber || '')}</td><td class="num">${P.inr(t.amount)}</td><td>${P.settlementBadge(t.status)}${t.failureReason ? `<br><small style="color:#b42318">${e(t.failureReason)}</small>` : ''}</td><td>${t.paidAt ? e(P.when(t.paidAt)) : '–'}</td></tr>`).join('');
+
+                body.innerHTML = `<div class="pay-stats">${cards.join('')}</div>${rail}
+                    <div class="glass-card" style="margin-top:1rem;"><h4>Payout history</h4>${hist
+                        ? `<div class="pay-scroll"><table class="pay-table-wide"><thead><tr><th>Booking</th><th class="num">Amount</th><th>Status</th><th>Paid on</th></tr></thead><tbody>${hist}</tbody></table></div>`
+                        : '<p class="empty" style="margin-top:0.5rem;">No payouts yet. Payouts appear here only after money has actually been sent to your bank.</p>'}</div>
+                    <div class="glass-card" style="margin-top:1rem;"><h4>Earnings by booking</h4>${rows
+                        ? `<div class="pay-scroll"><table class="pay-table-wide"><thead><tr><th>Booking</th><th>Customer</th><th class="num">Service</th><th class="num">Commission</th><th class="num">Refunds</th><th class="num">You earn</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`
+                        : '<p class="empty" style="margin-top:0.5rem;">No paid bookings yet. When a customer pays for one of your bookings it appears here.</p>'}</div>`;
+
+                const setup = document.getElementById('payout-setup');
+                if (setup) setup.addEventListener('click', () => openPayoutForm(load));
+                const refresh = document.getElementById('payout-refresh');
+                if (refresh) refresh.addEventListener('click', async () => { refresh.disabled = true; const rr = await P.call('POST', '/worker/payout-account/sync'); if (!rr.ok) alert(rr.data.message || 'Could not refresh.'); load(); });
+            };
+
+            const openPayoutForm = (done) => {
+                const f = (id, label, ph, extra = '') => `<label class="pay-field"><span>${label}</span><input id="po-${id}" ${extra} placeholder="${ph}" autocomplete="off"><small class="pay-sub" id="po-${id}-e" style="color:#b42318" role="alert"></small></label>`;
+                const dlg = P.dialog(`<button class="pay-x" type="button" aria-label="Close" data-x>&times;</button>
+                    <h3 id="pay-title">Set up payouts</h3>
+                    <p class="pay-sub">These details go to Razorpay to create your payout account. LocalHire does not store your PAN or full bank account number.</p>
+                    ${f('legalName', 'Full legal name', 'As on your PAN')}${f('pan', 'PAN', 'ABCDE1234F', 'maxlength="10"')}${f('phone', 'Mobile number', '10-digit number', 'inputmode="numeric"')}
+                    ${f('street', 'Street address', 'House / street')}${f('city', 'City', '')}${f('state', 'State', '')}${f('postalCode', 'PIN code', '6 digits', 'inputmode="numeric" maxlength="6"')}
+                    ${f('accountNumber', 'Bank account number', '', 'inputmode="numeric"')}${f('ifsc', 'IFSC', 'HDFC0001234', 'maxlength="11"')}${f('beneficiaryName', 'Account holder name', '')}
+                    <div id="po-msg" class="pay-note err" role="alert" hidden></div>
+                    <div class="pay-actions"><button class="pay-btn ghost" type="button" data-x>Cancel</button><button class="pay-btn primary" type="button" id="po-go">Submit</button></div>`);
+                dlg.el.addEventListener('click', async (ev) => {
+                    if (ev.target.closest('[data-x]')) return dlg.close('x');
+                    if (!ev.target.closest('#po-go')) return;
+                    const keys = ['legalName', 'pan', 'phone', 'street', 'city', 'state', 'postalCode', 'accountNumber', 'ifsc', 'beneficiaryName'];
+                    const body2 = {}; keys.forEach((k) => { body2[k] = dlg.el.querySelector('#po-' + k).value; });
+                    const go = dlg.el.querySelector('#po-go'); go.disabled = true; go.textContent = 'Submitting…';
+                    const rr = await P.call('POST', '/worker/payout-account', body2);
+                    keys.forEach((k) => { dlg.el.querySelector('#po-' + k + '-e').textContent = (rr.data.errors && rr.data.errors[k]) || ''; });
+                    const m = dlg.el.querySelector('#po-msg');
+                    if (rr.ok) { dlg.close('ok'); done(); return; }
+                    go.disabled = false; go.textContent = 'Submit'; m.hidden = false; m.textContent = rr.data.message || 'Could not submit your details.';
+                });
+            };
+            load();
+        })();
+
+        // ── Go online / offline (availability) ───────────────────────────────────
+        if (d.hasProfile && window.LocalHireTracking) {
+            const T = window.LocalHireTracking;
+            const statusEl = document.getElementById('online-status');
+            const gpsEl = document.getElementById('online-gps');
+            const toggle = document.getElementById('online-toggle');
+            const msg = document.getElementById('online-msg');
+            const defaultMsg = msg.textContent;
+            const PERM = { granted: 'Allowed', denied: 'Blocked in browser settings', prompt: 'Will be asked when you go online', unsupported: 'Not supported by this browser' };
+            const paint = (s) => {
+                const online = s.status === 'online'; const stale = s.status === 'stale'; const busy = s.status === 'starting';
+                statusEl.innerHTML = busy ? '<strong>Getting your location…</strong>'
+                    : online ? '<strong style="color:#065f46;">● You are online</strong> and visible to nearby customers'
+                    : stale ? '<strong style="color:#b45309;">● Location out of date</strong>: customers cannot see you online'
+                    : '<strong>○ You are offline</strong>';
+                toggle.textContent = busy ? 'Please wait…' : online || stale ? 'Go offline' : 'Go online';
+                toggle.disabled = busy || !v.isVerified;
+                const acc = T.accuracyInfo(s.accuracy);
+                gpsEl.innerHTML = `<div>Location permission: <b>${e(PERM[s.permission] || s.permission)}</b></div>
+                    <div>GPS accuracy: <b>${s.accuracy != null ? e(acc.label) : '—'}</b>${s.accuracy != null ? ` (±${Math.round(s.accuracy)} m)` : ''}</div>
+                    <div>Last location update: <b>${s.lastOkAt ? e(T.ago(s.lastOkAt)) : '—'}</b>${s.network ? '' : ' · <b style="color:#b42318">no internet connection</b>'}</div>`;
+                msg.textContent = s.message || defaultMsg;
+                msg.style.color = s.message ? (s.status === 'online' ? '#92400e' : '#b91c1c') : '';
+            };
+            const avail = T.createAvailability({ onState: paint });
+            toggle.addEventListener('click', async () => {
+                const st = avail.state();
+                if (st.status === 'online' || st.status === 'stale') {
+                    // an active journey is a separate, per-booking share: it is not switched by this toggle
+                    await avail.goOffline();
+                } else await avail.goOnline();
+            });
+            setInterval(() => paint(avail.state()), 20000); // refresh the "x min ago" wording
+            avail.init();
+        }
+
+        // ── Portfolio ────────────────────────────────────────────────────────────
+        if (d.hasProfile) {
+            const grid = document.getElementById('portfolio-grid');
+            const pmsg = document.getElementById('portfolio-msg');
+            const render = async () => {
+                try {
+                    const res = await window.localHireAPI._json('/worker/portfolio');
+                    grid.innerHTML = res.items.length ? res.items.map((i) => `<div style="position:relative;">
+                        <img src="${e(i.url)}" alt="${e(i.caption || 'Portfolio photo')}" style="width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px;">
+                        <button type="button" data-del="${e(i.id)}" aria-label="Remove photo" style="position:absolute; top:4px; right:4px; border:0; border-radius:50%; width:24px; height:24px; background:rgba(0,0,0,0.65); color:#fff; cursor:pointer;">×</button></div>`).join('')
+                        : '<p class="empty" style="grid-column:1/-1;">No portfolio photos yet.</p>';
+                    grid.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+                        try { await window.localHireAPI._json('/worker/portfolio/' + encodeURIComponent(b.dataset.del), 'DELETE'); render(); } catch (err) { pmsg.textContent = err.message; }
+                    }));
+                } catch (err) { pmsg.textContent = err.message; }
+            };
+            document.getElementById('portfolio-file').addEventListener('change', async (ev) => {
+                const file = ev.target.files[0]; ev.target.value = '';
+                if (!file) return;
+                if (file.size > 5 * 1024 * 1024) { pmsg.textContent = 'That image is over 5 MB.'; return; }
+                pmsg.textContent = 'Uploading…';
+                const token = sessionStorage.getItem('localHire_token');
+                const form = new FormData();
+                form.append('photo', file); form.append('caption', document.getElementById('portfolio-caption').value);
+                try {
+                    const res = await fetch(`${window.localHireAPI.baseUrl}/worker/portfolio`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || !data.success) throw new Error(data.message || 'Upload failed');
+                    document.getElementById('portfolio-caption').value = ''; pmsg.textContent = 'Photo added.'; render();
+                } catch (err) { pmsg.textContent = err.message; }
+            });
+            render();
+        }
+
+        // A brand-new worker with nothing started is sent to onboarding rather than an empty dashboard.
+        if (!d.hasProfile && !v.status) {
+            try { const s = await window.localHireAPI.getWorkerStatus(); if (s.state === 'NOT_STARTED') window.location.replace('worker-onboarding.html'); } catch (err) { /* stay */ }
+        }
+    });
+    </script>
+</body>
+</html>

@@ -89,6 +89,8 @@
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             renderNavbar('navbar-container', 'pages');
+            // Categories come from the database (one source), the static options are only a fallback
+            window.localHireCategories.fill(document.getElementById('job-category'));
 
             const form = document.getElementById('post-job-form');
             const modal = document.getElementById('success-modal');

@@ -96,6 +96,8 @@
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             renderNavbar('navbar-container', 'pages');
+            // Categories come from the database (one source), the static options are only a fallback
+            window.localHireCategories.fill(document.getElementById('filter-category'));
 
             const user = window.localHireApp.getCurrentUser();
             if (!user) {
