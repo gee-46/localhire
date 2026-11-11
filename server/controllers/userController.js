@@ -1,7 +1,11 @@
 const prisma = require('../config/prisma');
 const path = require('path');
-const { supabaseAdmin } = require('../config/supabase');
-const { stopWorkerTracking } = require('../trackingState');
+const supabaseConfig = require('../config/supabase');
+const { sniffMime } = require('../services/documentStorage');
+const { VERIFIED_PROFILE } = require('../services/workerEligibility');
+const { realAvatarUrl } = require('../services/avatar');
+const { parseDiscoveryQuery, discover, approximateDistanceKm } = require('../services/workerDiscovery');
+const FRESH_MS = 15 * 60 * 1000;
 
 const toNumber = (value) => {
   const n = Number(value);
@@ -38,159 +42,133 @@ const ensureCategory = async (categoryName) => {
   return category;
 };
 
-const formatWorker = (user) => {
+// Public worker shape. By default it carries NOTHING private: no email, phone or street address, and
+// only a real photograph (never a generated placeholder). `self: true` is for the worker's own responses.
+const formatWorker = (user, { self = false } = {}) => {
   const profile = user.workerProfile;
   const categoryName = profile?.primaryCategory?.name || 'General';
   const skills = (profile?.skills || []).map((skill) => skill.skillName).filter(Boolean);
-  const availabilityLabel = profile?.availabilities?.length
-    ? 'Available Today'
-    : 'Available Today';
 
-  return {
+  const hourly = toNumber(profile?.hourlyRate);
+  const visit = toNumber(profile?.inspectionFee);
+  const startingPrice = hourly > 0 ? hourly : (visit > 0 ? visit : null);
+  const priceUnit = hourly > 0 ? 'hour' : (visit > 0 ? 'visit' : null);
+  const serviceArea = [profile?.locality, profile?.city].filter(Boolean).join(', ') || null;
+
+  const sharing = profile?.locationSharing;
+  const availableNow = Boolean(sharing && sharing.isAvailable && sharing.sharingEnabled && sharing.lastLocationUpdate
+    && (Date.now() - new Date(sharing.lastLocationUpdate).getTime()) <= FRESH_MS);
+
+  const worker = {
     id: user.id,
     _id: user.id,
     name: user.name,
-    email: user.email,
     role: 'Worker',
-    avatarUrl: user.avatarUrl,
-    phone: user.phone,
+    avatarUrl: realAvatarUrl(user.avatarUrl),
     category: categoryName,
-    subCategory: profile?.primaryCategory?.name || '',
-    hourlyRate: toNumber(profile?.hourlyRate),
-    rating: toNumber(profile?.rating),
+    categorySlug: profile?.primaryCategory?.slug || null,
+    subCategory: '',
+    additionalCategories: (profile?.additionalCategories || []).map((c) => c.category?.name).filter(Boolean),
+    hourlyRate: hourly,
+    startingCharge: visit,
+    startingPrice,
+    priceUnit,
+    // Only report a rating when real reviews back it; a worker with none has rating = null.
+    rating: Number(profile?.reviewsCount || 0) > 0 ? toNumber(profile?.rating) : null,
     reviewsCount: Number(profile?.reviewsCount || 0),
     completedJobsCount: Number(profile?.completedJobsCount || 0),
     bio: profile?.bio || '',
     skills,
+    languages: profile?.languages || [],
     experience: `${Number(profile?.experienceYears || 0)} years`,
     experienceYears: Number(profile?.experienceYears || 0),
     businessName: profile?.businessName || '',
     serviceRadiusKm: Number(profile?.serviceRadiusKm || 20),
+    serviceArea,
     isVerified: profile?.verificationStatus === 'VERIFIED',
     verificationStatus: profile?.verificationStatus,
-    availability: availabilityLabel,
+    availableNow,
+    availability: availableNow ? 'Available now' : 'Not available right now',
+    // Never the worker's street address: only the public service area.
     location: {
-      address: profile?.serviceAddress || 'Nearby',
+      address: serviceArea || 'Nearby',
       radiusKm: profile?.serviceRadiusKm || 20
     },
     createdAt: user.createdAt,
     updatedAt: user.updatedAt
   };
+
+  if (profile?.availabilities) {
+    worker.workingHours = profile.availabilities
+      .filter((a) => a.isActive)
+      .sort((x, y) => x.dayOfWeek - y.dayOfWeek)
+      .map((a) => ({ dayOfWeek: a.dayOfWeek, startTime: a.startTime, endTime: a.endTime }));
+  }
+  if (profile?.portfolio) {
+    worker.portfolio = profile.portfolio
+      .sort((x, y) => x.sortOrder - y.sortOrder || new Date(y.createdAt) - new Date(x.createdAt))
+      .map((item) => ({ id: item.id, url: item.imageUrl, caption: item.caption || '' }));
+  }
+  if (self) {
+    worker.email = user.email;
+    worker.phone = user.phone;
+  }
+  return worker;
 };
 
-// @desc    Get workers with optional search, category & geospatial filters
+const WORKER_INCLUDE = {
+  workerProfile: {
+    include: {
+      primaryCategory: true,
+      skills: true,
+      availabilities: true,
+      additionalCategories: { include: { category: { select: { name: true } } } },
+      locationSharing: { select: { isAvailable: true, sharingEnabled: true, lastLocationUpdate: true } }
+    }
+  }
+};
+
+// @desc    Discover workers: verified + available only, with real filters and sorting
 // @route   GET /api/users/workers
 // @access  Public
+//   q, category (name or slug), lat+lng, radiusKm, maxPrice, minRating, minExperience,
+//   availability=any|today|now (+day, time), reviewedOnly, sort=nearest|rating|price|experience, limit, page
 exports.getWorkers = async (req, res) => {
   try {
-    const { q, category, maxPrice, lat, lng } = req.query;
-    const radiusInput = req.query.maxDistanceKm ?? req.query.radiusKm;
-    const radiusKm = radiusInput === undefined || radiusInput === '' ? 20 : Number(radiusInput);
-    const hasLat = lat !== undefined && lat !== null && lat !== '';
-    const hasLng = lng !== undefined && lng !== null && lng !== '';
-    if (hasLat !== hasLng) {
-      return res.status(400).json({ success: false, message: 'Latitude and longitude must be supplied together.' });
-    }
+    const parsed = parseDiscoveryQuery(req.query);
+    if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+    const p = parsed.params;
 
-    const latNum = hasLat ? Number(lat) : null;
-    const lngNum = hasLng ? Number(lng) : null;
-    if ((hasLat && (!Number.isFinite(latNum) || latNum < -90 || latNum > 90)) ||
-        (hasLng && (!Number.isFinite(lngNum) || lngNum < -180 || lngNum > 180))) {
-      return res.status(400).json({ success: false, message: 'Latitude or longitude is out of range.' });
-    }
-    if (!Number.isFinite(radiusKm) || radiusKm < 1 || radiusKm > 100) {
-      return res.status(400).json({ success: false, message: 'Search radius must be between 1 and 100 km.' });
-    }
+    const { total, rows } = await discover(p);
+    if (!rows.length) return res.json({ success: true, count: 0, total, page: p.page, workers: [] });
 
-    const maxPriceNum = maxPrice !== undefined && maxPrice !== null && maxPrice !== '' ? Number(maxPrice) : null;
-    if (maxPriceNum !== null && (!Number.isFinite(maxPriceNum) || maxPriceNum < 0)) {
-      return res.status(400).json({ success: false, message: 'Maximum price must be a non-negative number.' });
-    }
-
-    const freshSince = new Date(Date.now() - 15 * 60 * 1000);
-    let locationRows;
-    if (hasLat) {
-      locationRows = await prisma.$queryRaw`
-        SELECT wl."workerProfileId",
-               ST_Distance(wl."location", ST_SetSRID(ST_MakePoint(${lngNum}, ${latNum}), 4326)::geography) / 1000.0 AS "distanceKm",
-               ST_Y(wl."location"::geometry) AS "latitude",
-               ST_X(wl."location"::geometry) AS "longitude"
-        FROM "WorkerLocation" wl
-        JOIN "WorkerProfile" wp ON wp."id" = wl."workerProfileId"
-        JOIN "User" u ON u."id" = wp."userId"
-        JOIN "ServiceCategory" sc ON sc."id" = wp."primaryCategoryId"
-        WHERE wl."isAvailable" = true
-          AND wl."sharingEnabled" = true
-          AND wl."location" IS NOT NULL
-          AND wl."lastLocationUpdate" >= ${freshSince}
-          AND u."isActive" = true
-          AND ST_DWithin(wl."location", ST_SetSRID(ST_MakePoint(${lngNum}, ${latNum}), 4326)::geography, ${radiusKm * 1000})
-          AND (${category || null}::text IS NULL OR lower(sc."name") = lower(${category || null}::text))
-          AND (${maxPriceNum}::numeric IS NULL OR wp."hourlyRate" <= ${maxPriceNum})
-        ORDER BY "distanceKm" ASC
-      `;
-    } else {
-      locationRows = await prisma.workerLocation.findMany({
-        where: {
-          isAvailable: true,
-          sharingEnabled: true,
-          lastLocationUpdate: { gte: freshSince },
-          workerProfile: {
-            user: { isActive: true },
-            ...(category ? { primaryCategory: { name: { equals: category, mode: 'insensitive' } } } : {}),
-            ...(maxPriceNum !== null ? { hourlyRate: { lte: maxPriceNum } } : {})
-          }
-        },
-        select: { workerProfileId: true }
-      });
-    }
-
-    const locationByProfileId = new Map(locationRows.map((row) => [row.workerProfileId, row]));
-    const profileIds = [...locationByProfileId.keys()];
-    if (profileIds.length === 0) {
-      return res.json({ success: true, count: 0, workers: [] });
-    }
-
-    const workerUsers = await prisma.user.findMany({
-      where: { role: 'WORKER', isActive: true, workerProfile: { id: { in: profileIds } } },
-      include: {
-        workerProfile: {
-          include: {
-            primaryCategory: true,
-            skills: true
-          }
-        }
-      }
+    const byProfileId = new Map(rows.map((row) => [row.workerProfileId, row]));
+    const users = await prisma.user.findMany({
+      where: { role: 'WORKER', isActive: true, workerProfile: { id: { in: [...byProfileId.keys()] }, ...VERIFIED_PROFILE } },
+      include: WORKER_INCLUDE
     });
+    const order = new Map(rows.map((row, index) => [row.workerProfileId, index]));
 
-    const qLower = String(q || '').trim().toLowerCase();
-    const workers = workerUsers
-      .filter((user) => user && user.workerProfile)
+    const workers = users
+      .filter((user) => user.workerProfile)
+      .sort((a, b) => order.get(a.workerProfile.id) - order.get(b.workerProfile.id))
       .map((user) => {
         const worker = formatWorker(user);
-        const locationRow = locationByProfileId.get(user.workerProfile.id);
+        const row = byProfileId.get(user.workerProfile.id);
+        worker.availableNow = true;
         worker.availability = 'Available now';
-        if (hasLat && locationRow) {
-          worker.distanceKm = Math.round(Number(locationRow.distanceKm) * 10) / 10;
-          worker.mapLocation = {
-            latitude: Math.round(Number(locationRow.latitude) * 100) / 100,
-            longitude: Math.round(Number(locationRow.longitude) * 100) / 100
-          };
+        // Public endpoint: only the worker's service area (locality, city) and a coarse distance. No coordinates of any
+        // kind, not even rounded ones, are returned, so there is nothing to plot on a public map.
+        if (p.lat !== null && row.distanceKm !== null && row.distanceKm !== undefined) {
+          worker.distanceKm = approximateDistanceKm(row.distanceKm);
         }
         return worker;
-      })
-      .filter((worker) => {
-        if (maxPriceNum !== null && worker.hourlyRate > maxPriceNum) return false;
-        if (!qLower) return true;
-        return [worker.name, worker.category, worker.bio, ...(worker.skills || [])]
-          .some((value) => String(value || '').toLowerCase().includes(qLower));
       });
 
-    if (hasLat) workers.sort((left, right) => left.distanceKm - right.distanceKm);
-    return res.json({ success: true, count: workers.length, workers });
+    return res.json({ success: true, count: workers.length, total, page: p.page, workers });
   } catch (error) {
     console.error('[User Controller] getWorkers error:', error);
-    res.status(500).json({ success: false, message: 'Server error retrieving workers', error: error.message });
+    res.status(500).json({ success: false, message: 'Server error retrieving workers' });
   }
 };
 
@@ -205,62 +183,29 @@ exports.getWorkerById = async (req, res) => {
     try {
       worker = await prisma.user.findUnique({
         where: { id: rawId },
-        include: {
-          workerProfile: {
-            include: {
-              primaryCategory: true,
-              skills: true
-            }
-          }
-        }
+        include: { ...WORKER_INCLUDE, workerProfile: { include: { ...WORKER_INCLUDE.workerProfile.include, portfolio: true } } }
       });
     } catch (e) {
       // Invalid UUID format or lookup exception
       worker = null;
     }
 
-    // Fallback for legacy mock IDs (w1, w2, w3, etc.)
-    if (!worker || worker.role !== 'WORKER') {
-      const mockEmailMap = {
-        w1: 'electrician@localhire.dev',
-        w2: 'electrician@localhire.dev',
-        w3: 'cleaner@localhire.dev',
-        w4: 'plumber@localhire.dev',
-        w5: 'driver@localhire.dev',
-        w6: 'freelancer@localhire.dev',
-        w7: 'electrician@localhire.dev'
-      };
-      const fallbackEmail = mockEmailMap[rawId];
-      if (fallbackEmail) {
-        worker = await prisma.user.findFirst({
-          where: { email: fallbackEmail, role: 'WORKER' },
-          include: {
-            workerProfile: {
-              include: {
-                primaryCategory: true,
-                skills: true
-              }
-            }
-          }
-        });
-      }
-      if (!worker && typeof rawId === 'string' && rawId.startsWith('w')) {
-        worker = await prisma.user.findFirst({
-          where: { role: 'WORKER' },
-          include: {
-            workerProfile: {
-              include: {
-                primaryCategory: true,
-                skills: true
-              }
-            }
-          }
-        });
-      }
-    }
-
     if (!worker || worker.role !== 'WORKER') {
       return res.status(404).json({ success: false, message: 'Worker profile not found' });
+    }
+
+    // Only verified, active workers have a public profile. The worker themself, admins, and customers
+    // who already have a booking with this worker (their history stays reachable) are the exceptions.
+    const isPublic = worker.isActive !== false && worker.workerProfile && worker.workerProfile.verificationStatus === 'VERIFIED';
+    if (!isPublic) {
+      const viewer = req.user || null;
+      let allowed = Boolean(viewer && (viewer.id === worker.id || viewer.role === 'Admin'));
+      if (!allowed && viewer && viewer.role === 'Customer') {
+        allowed = Boolean(await prisma.booking.findFirst({ where: { customerId: viewer.id, workerId: worker.id }, select: { id: true } }));
+      }
+      if (!allowed) {
+        return res.status(404).json({ success: false, message: 'Worker profile not found' });
+      }
     }
 
     res.json({ success: true, worker: formatWorker(worker) });
@@ -280,7 +225,8 @@ exports.getMyLocationSharing = async (req, res) => {
           select: {
             isAvailable: true,
             sharingEnabled: true,
-            lastLocationUpdate: true
+            lastLocationUpdate: true,
+            accuracyMeters: true
           }
         }
       }
@@ -290,23 +236,25 @@ exports.getMyLocationSharing = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Worker profile not found.' });
     }
 
-    return res.json({
-      success: true,
-      location: profile.locationSharing || {
-        isAvailable: false,
-        sharingEnabled: false,
-        lastLocationUpdate: null
-      }
-    });
+    const loc = profile.locationSharing || { isAvailable: false, sharingEnabled: false, lastLocationUpdate: null, accuracyMeters: null };
+    // "online" only counts while the position is fresh; a worker whose page was closed drops out of search after FRESH_MS
+    const fresh = Boolean(loc.lastLocationUpdate && Date.now() - new Date(loc.lastLocationUpdate).getTime() <= AVAILABILITY_FRESH_MS);
+    return res.json({ success: true, location: loc, isFresh: fresh, freshForSeconds: AVAILABILITY_FRESH_MS / 1000, maxAccuracyMeters: AVAILABILITY_MAX_ACCURACY_M });
   } catch (error) {
     console.error('[User Controller] getMyLocationSharing error:', error);
     return res.status(500).json({ success: false, message: 'Could not retrieve location-sharing settings.' });
   }
 };
 
+// Availability ("Go online") location rules. A fix this inaccurate or this old would put the worker in the wrong
+// place in customers' searches, so it is refused and the worker is told why.
+const AVAILABILITY_MAX_ACCURACY_M = 2000;
+const AVAILABILITY_MAX_FIX_AGE_MS = 2 * 60 * 1000;
+const AVAILABILITY_FRESH_MS = 15 * 60 * 1000;
+
 exports.updateMyLocationSharing = async (req, res) => {
   try {
-    const { sharingEnabled, isAvailable, latitude, longitude, accuracy } = req.body || {};
+    const { sharingEnabled, isAvailable, latitude, longitude, accuracy, timestamp } = req.body || {};
     if (typeof sharingEnabled !== 'boolean' || typeof isAvailable !== 'boolean') {
       return res.status(400).json({ success: false, message: 'sharingEnabled and isAvailable must be booleans.' });
     }
@@ -323,7 +271,8 @@ exports.updateMyLocationSharing = async (req, res) => {
     let locationData = {
       latitude: null,
       longitude: null,
-      lastLocationUpdate: null
+      lastLocationUpdate: null,
+      accuracyMeters: null
     };
 
     if (isSharingAndAvailable) {
@@ -333,13 +282,24 @@ exports.updateMyLocationSharing = async (req, res) => {
       if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
         return res.status(400).json({ success: false, message: 'Valid latitude and longitude are required while sharing location.' });
       }
-      if (accuracyValue !== null && (!Number.isFinite(accuracyValue) || accuracyValue < 0 || accuracyValue > 5000)) {
-        return res.status(400).json({ success: false, message: 'Location accuracy must be between 0 and 5000 meters.' });
+      if (accuracyValue !== null && (!Number.isFinite(accuracyValue) || accuracyValue < 0)) {
+        return res.status(400).json({ success: false, code: 'BAD_ACCURACY', message: 'Location accuracy must be a non-negative number of meters.' });
+      }
+      if (accuracyValue !== null && accuracyValue > AVAILABILITY_MAX_ACCURACY_M) {
+        return res.status(422).json({ success: false, code: 'LOW_ACCURACY', message: `Your GPS accuracy is too low (±${Math.round(accuracyValue)} m) to place you correctly for customers. Move to an open area, turn on high-accuracy location and try again.`, maxAccuracyMeters: AVAILABILITY_MAX_ACCURACY_M });
+      }
+      if (timestamp !== undefined && timestamp !== null && timestamp !== '') {
+        const t = typeof timestamp === 'number' ? timestamp : new Date(timestamp).getTime();
+        if (!Number.isFinite(t)) return res.status(400).json({ success: false, code: 'BAD_TIMESTAMP', message: 'Invalid location timestamp.' });
+        if (Date.now() - t > AVAILABILITY_MAX_FIX_AGE_MS) {
+          return res.status(422).json({ success: false, code: 'STALE_FIX', message: 'That GPS reading is too old. Please get a fresh location and try again.' });
+        }
       }
       locationData = {
         latitude: lat,
         longitude: lng,
-        lastLocationUpdate: new Date()
+        lastLocationUpdate: new Date(),
+        accuracyMeters: accuracyValue
       };
     }
 
@@ -359,13 +319,13 @@ exports.updateMyLocationSharing = async (req, res) => {
       select: {
         isAvailable: true,
         sharingEnabled: true,
-        lastLocationUpdate: true
+        lastLocationUpdate: true,
+        accuracyMeters: true
       }
     });
 
-    if (!sharingEnabled || !isAvailable) {
-      stopWorkerTracking(req.user.id, 'Worker location sharing or availability was turned off.');
-    }
+    // Going offline only ends marketplace availability. Journey sharing for a booking the worker is travelling to is a
+    // separate, explicit act (Start journey / Pause sharing) and is not switched by this toggle.
 
     return res.json({ success: true, location });
   } catch (error) {
@@ -479,7 +439,7 @@ exports.updateProfile = async (req, res) => {
       }
     });
 
-    const responseUser = refreshedUser && refreshedUser.workerProfile ? formatWorker(refreshedUser) : {
+    const responseUser = refreshedUser && refreshedUser.workerProfile ? formatWorker(refreshedUser, { self: true }) : {
       id: refreshedUser.id,
       _id: refreshedUser.id,
       name: refreshedUser.name,
@@ -509,35 +469,31 @@ exports.uploadAvatar = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No image file provided.' });
     }
 
+    const supabaseAdmin = supabaseConfig.supabaseAdmin;
     if (!supabaseAdmin) {
-      return res.status(500).json({ success: false, message: 'Supabase Storage is not configured on the server.' });
+      return res.status(503).json({ success: false, message: 'Photo storage is not configured on the server.' });
     }
 
-    // Determine safe extension based on MIME type
-    const mimeMap = {
-      'image/jpeg': 'jpg',
-      'image/jpg': 'jpg',
-      'image/png': 'png',
-      'image/webp': 'webp'
-    };
-    const ext = mimeMap[req.file.mimetype.toLowerCase()] || 'jpg';
-    const fileName = `${userId}/avatar-${Date.now()}.${ext}`;
+    // The file's own bytes decide what it is. The browser-declared Content-Type is attacker-controlled, and this bucket
+    // is PUBLIC: without this check an HTML/SVG/script could be stored there under an image type.
+    const detected = sniffMime(req.file.buffer);
+    const mimeMap = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+    if (!detected || !mimeMap[detected]) {
+      return res.status(400).json({ success: false, message: 'The file is not a valid JPG, PNG or WebP image.' });
+    }
+    const fileName = `${userId}/avatar-${Date.now()}.${mimeMap[detected]}`;
 
     // Upload to Supabase Storage bucket 'profile-photos'
-    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+    const { error: uploadError } = await supabaseAdmin.storage
       .from('profile-photos')
       .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype,
+        contentType: detected,
         upsert: true
       });
 
     if (uploadError) {
-      console.error('[User Controller] Supabase Storage upload error:', uploadError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to upload photo to storage.',
-        error: uploadError.message
-      });
+      console.error('[User Controller] Supabase Storage upload error:', uploadError.message);
+      return res.status(502).json({ success: false, message: 'Failed to upload photo to storage.' });
     }
 
     // Retrieve public URL for the uploaded photo
@@ -564,7 +520,7 @@ exports.uploadAvatar = async (req, res) => {
       }
     });
 
-    const formatted = updatedUser.workerProfile ? formatWorker(updatedUser) : {
+    const formatted = updatedUser.workerProfile ? formatWorker(updatedUser, { self: true }) : {
       id: updatedUser.id,
       _id: updatedUser.id,
       name: updatedUser.name,
@@ -584,11 +540,7 @@ exports.uploadAvatar = async (req, res) => {
     });
   } catch (error) {
     console.error('[User Controller] uploadAvatar error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error processing profile photo upload',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error processing profile photo upload' });
   }
 };
 
@@ -612,7 +564,7 @@ exports.deleteAvatar = async (req, res) => {
       }
     });
 
-    const formatted = updatedUser.workerProfile ? formatWorker(updatedUser) : {
+    const formatted = updatedUser.workerProfile ? formatWorker(updatedUser, { self: true }) : {
       id: updatedUser.id,
       _id: updatedUser.id,
       name: updatedUser.name,

@@ -73,7 +73,8 @@ test('Admin Governance 2: GET /metrics returns computed DB telemetry including r
   const origJobCount = prisma.jobPost.count;
   const origAppCount = prisma.jobApplication.count;
   const origBookingCount = prisma.booking.count;
-  const origEscrowAggregate = prisma.escrowPayment.aggregate;
+  const origPaymentAggregate = prisma.payment.aggregate;
+  const origSettlementAggregate = prisma.workerSettlement.aggregate;
 
   try {
     prisma.user.count = async (opts) => {
@@ -101,20 +102,11 @@ test('Admin Governance 2: GET /metrics returns computed DB telemetry including r
       return 20; // total bookings
     };
 
-    prisma.escrowPayment.aggregate = async (opts) => {
-      if (opts?.where?.status === 'HELD_IN_ESCROW') {
-        return { _sum: { totalAmount: 4500.00 }, _count: { id: 3 } };
-      }
-      if (opts?.where?.status === 'RELEASED_TO_WORKER') {
-        return {
-          _sum: { totalAmount: 18500.00, platformFee: 925.00, workerPayoutAmount: 17575.00 },
-          _count: { id: 14 }
-        };
-      }
-      return {
-        _sum: { totalAmount: 23000.00, platformFee: 925.00, workerPayoutAmount: 17575.00 },
-        _count: { id: 17 }
-      };
+    // captured payments: 23000 volume, 400 of platform fees, 500 refunded
+    prisma.payment.aggregate = async () => ({ _sum: { totalAmount: 23000.00, platformFee: 400.00, amountRefunded: 500.00 }, _count: { id: 17 } });
+    prisma.workerSettlement.aggregate = async (opts) => {
+      if (opts?.where?.status?.in?.includes('PENDING_COMPLETION')) return { _sum: { netAmount: 4500.00 }, _count: { id: 3 } };
+      return { _sum: { netAmount: 17575.00, commission: 925.00 }, _count: { id: 14 } };
     };
 
     const req = { user: { id: 'admin-1', role: 'Admin', email: 'admin@localhire.dev' } };
@@ -138,113 +130,93 @@ test('Admin Governance 2: GET /metrics returns computed DB telemetry including r
     assert.equal(m.totalBookings, 20);
 
     // Revenue & Escrow totals computed from DB aggregates
-    assert.equal(m.revenue, 925.00);
-    assert.equal(m.platformRevenue, 925.00);
-    assert.equal(m.escrowBalance, 4500.00);
+    assert.equal(m.revenue, 1325.00, 'platform fees (400) + commission on confirmed jobs (925)');
+    assert.equal(m.platformRevenue, 1325.00);
+    assert.equal(m.escrowBalance, 4500.00, 'captured, awaiting completion or dispute');
     assert.equal(m.heldInEscrow, 4500.00);
     assert.equal(m.releasedToWorkers, 17575.00);
     assert.equal(m.totalTransactionVolume, 23000.00);
-    assert.equal(m.escrowTotals.held, 4500.00);
-    assert.equal(m.escrowTotals.released, 18500.00);
+    assert.equal(m.paymentTotals.refunded, 500.00);
+    assert.equal(m.paymentTotals.awaitingCompletion, 4500.00);
   } finally {
     prisma.user.count = origUserCount;
     prisma.workerProfile.count = origWorkerCount;
     prisma.jobPost.count = origJobCount;
     prisma.jobApplication.count = origAppCount;
     prisma.booking.count = origBookingCount;
-    prisma.escrowPayment.aggregate = origEscrowAggregate;
+    prisma.payment.aggregate = origPaymentAggregate;
+    prisma.workerSettlement.aggregate = origSettlementAggregate;
   }
 });
 
-test('Admin Governance 3: PATCH /users/:id/verify updates VerificationStatus and writes AuditLog row', async () => {
-  const origFindUnique = prisma.user.findUnique;
-  const origUserUpdate = prisma.user.update;
-  const origWorkerUpdate = prisma.workerProfile.update;
-  const origAuditCreate = prisma.auditLog.create;
-
-  let capturedUserUpdate = null;
-  let capturedWorkerUpdate = null;
-  let capturedAuditLog = null;
-
-  try {
-    prisma.user.findUnique = async ({ where }) => {
-      if (where.id === 'target-worker-1') {
-        return {
-          id: 'target-worker-1',
-          name: 'Jane Smith',
-          email: 'jane@example.com',
-          role: 'WORKER',
-          verificationStatus: 'UNVERIFIED',
-          workerProfile: {
-            id: 'wp-1',
-            verificationStatus: 'UNVERIFIED',
-            businessName: 'Smith Plumbing'
-          }
-        };
-      }
-      return null;
+// Worker verification is decided only by the document-review workflow. The legacy shortcut may no longer
+// grant VERIFIED (or fake a pending state) to a worker; it is audit-logged when attempted.
+function withMockedAdminDb(fn) {
+  return async () => {
+    const orig = {
+      findUnique: prisma.user.findUnique, userUpdate: prisma.user.update,
+      workerUpdate: prisma.workerProfile.update, auditCreate: prisma.auditLog.create,
+      onboardingFind: prisma.workerOnboarding.findUnique
     };
+    const calls = { userUpdate: null, workerUpdate: null, audit: null };
+    prisma.user.update = async ({ where, data }) => { calls.userUpdate = { where, data }; return { id: where.id, name: 'Jane Smith', email: 'jane@example.com', role: 'WORKER', verificationStatus: data.verificationStatus }; };
+    prisma.workerProfile.update = async ({ where, data }) => { calls.workerUpdate = { where, data }; return { id: where.id, ...data }; };
+    prisma.auditLog.create = async ({ data }) => { calls.audit = data; return { id: 'audit-log-1', ...data }; };
+    prisma.workerOnboarding.findUnique = async () => null;
+    try { await fn(calls); } finally {
+      prisma.user.findUnique = orig.findUnique; prisma.user.update = orig.userUpdate;
+      prisma.workerProfile.update = orig.workerUpdate; prisma.auditLog.create = orig.auditCreate;
+      prisma.workerOnboarding.findUnique = orig.onboardingFind;
+    }
+  };
+}
+const adminReq = (status, notes) => ({
+  params: { id: 'target-1' }, body: { status, notes },
+  user: { id: 'admin-99', email: 'admin@localhire.dev', role: 'Admin' }, ip: '127.0.0.1', headers: { 'user-agent': 'NodeTestAgent/1.0' }
+});
+const targetUser = (role, profileStatus) => async ({ where }) => (where.id === 'target-1' ? {
+  id: 'target-1', name: 'Jane Smith', email: 'jane@example.com', role, verificationStatus: profileStatus,
+  workerProfile: role === 'WORKER' ? { id: 'wp-1', verificationStatus: profileStatus, businessName: 'Smith Plumbing' } : null
+} : null);
 
-    prisma.user.update = async ({ where, data }) => {
-      capturedUserUpdate = { where, data };
-      return {
-        id: where.id,
-        name: 'Jane Smith',
-        email: 'jane@example.com',
-        role: 'WORKER',
-        verificationStatus: data.verificationStatus
-      };
-    };
-
-    prisma.workerProfile.update = async ({ where, data }) => {
-      capturedWorkerUpdate = { where, data };
-      return { id: where.id, ...data };
-    };
-
-    prisma.auditLog.create = async ({ data }) => {
-      capturedAuditLog = data;
-      return { id: 'audit-log-1', ...data };
-    };
-
-    const req = {
-      params: { id: 'target-worker-1' },
-      body: { status: 'VERIFIED', notes: 'Government ID verified' },
-      user: { id: 'admin-99', email: 'admin@localhire.dev', role: 'Admin' },
-      ip: '127.0.0.1',
-      headers: { 'user-agent': 'NodeTestAgent/1.0' }
-    };
+test('Admin Governance 3: the legacy shortcut cannot verify a worker, and the attempt is audit-logged', withMockedAdminDb(async (calls) => {
+  prisma.user.findUnique = targetUser('WORKER', 'UNVERIFIED');
+  for (const status of ['VERIFIED', 'PENDING_REVIEW']) {
+    calls.userUpdate = calls.workerUpdate = calls.audit = null;
     const res = createMockResponse();
-
-    await adminController.verifyUser(req, res);
-
-    assert.equal(res.statusCode, 200);
-    assert.equal(res.payload.success, true);
-    assert.equal(res.payload.user.verificationStatus, 'VERIFIED');
-    assert.equal(res.payload.user.isVerified, true);
-
-    // Verify User model updated
-    assert.equal(capturedUserUpdate.data.verificationStatus, 'VERIFIED');
-    assert.equal(capturedUserUpdate.data.isEmailVerified, true);
-
-    // Verify WorkerProfile updated
-    assert.equal(capturedWorkerUpdate.data.verificationStatus, 'VERIFIED');
-
-    // Verify AuditLog written
-    assert.ok(capturedAuditLog, 'AuditLog row must be created');
-    assert.equal(capturedAuditLog.userId, 'admin-99');
-    assert.equal(capturedAuditLog.action, 'USER_VERIFICATION_UPDATED');
-    assert.equal(capturedAuditLog.entityType, 'USER');
-    assert.equal(capturedAuditLog.entityId, 'target-worker-1');
-    assert.equal(capturedAuditLog.details.previousStatus, 'UNVERIFIED');
-    assert.equal(capturedAuditLog.details.newStatus, 'VERIFIED');
-    assert.equal(capturedAuditLog.details.adminEmail, 'admin@localhire.dev');
-  } finally {
-    prisma.user.findUnique = origFindUnique;
-    prisma.user.update = origUserUpdate;
-    prisma.workerProfile.update = origWorkerUpdate;
-    prisma.auditLog.create = origAuditCreate;
+    await adminController.verifyUser(adminReq(status, 'Government ID verified'), res);
+    assert.equal(res.statusCode, 409, status);
+    assert.equal(res.payload.code, 'WORKER_VERIFICATION_REQUIRES_REVIEW');
+    assert.equal(calls.userUpdate, null, 'no user row is modified');
+    assert.equal(calls.workerUpdate, null, 'no worker profile is modified');
+    assert.equal(calls.audit.action, 'WORKER_DIRECT_VERIFICATION_BLOCKED');
+    assert.equal(calls.audit.userId, 'admin-99');
+    assert.equal(calls.audit.details.requestedStatus, status);
   }
-});
+}));
+
+test('Admin Governance 3b: a worker\'s verification can still be withdrawn (audit-logged, email flag untouched)', withMockedAdminDb(async (calls) => {
+  prisma.user.findUnique = targetUser('WORKER', 'VERIFIED');
+  const res = createMockResponse();
+  await adminController.verifyUser(adminReq('REJECTED', 'Documents found to be invalid'), res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(calls.userUpdate.data.verificationStatus, 'REJECTED');
+  assert.equal(calls.userUpdate.data.isEmailVerified, undefined);
+  assert.equal(calls.workerUpdate.data.verificationStatus, 'REJECTED');
+  assert.equal(calls.audit.action, 'USER_VERIFICATION_UPDATED');
+  assert.equal(calls.audit.details.previousStatus, 'VERIFIED');
+  assert.equal(calls.audit.details.newStatus, 'REJECTED');
+}));
+
+test('Admin Governance 3c: non-worker accounts are unaffected by the worker restriction', withMockedAdminDb(async (calls) => {
+  prisma.user.findUnique = targetUser('CUSTOMER', 'UNVERIFIED');
+  const res = createMockResponse();
+  await adminController.verifyUser(adminReq('VERIFIED', 'Checked'), res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(calls.userUpdate.data.verificationStatus, 'VERIFIED');
+  assert.equal(calls.userUpdate.data.isEmailVerified, undefined);
+  assert.equal(calls.audit.action, 'USER_VERIFICATION_UPDATED');
+}));
 
 test('Admin Governance 4: PATCH /users/:id/verify rejects invalid status values with 400', async () => {
   const req = {

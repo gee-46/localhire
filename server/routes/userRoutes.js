@@ -18,13 +18,13 @@ const {
   setDefaultAddress,
   deleteAddress
 } = require('../controllers/addressController');
-const { protect, authorize, forbidRoles } = require('../middlewares/authMiddleware');
+const { protect, authorize, forbidRoles, optionalAuth } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
 // 'Find Workers' search directory: restricted from Worker accounts
 router.get('/workers', forbidRoles('Worker'), getWorkers);
-router.get('/workers/:id', getWorkerById);
+router.get('/workers/:id', optionalAuth, getWorkerById);
 router.get('/addresses', protect, getMyAddresses);
 router.post('/addresses', protect, createAddress);
 router.put('/addresses/:id', protect, updateAddress);
