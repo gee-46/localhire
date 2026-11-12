@@ -1,0 +1,115 @@
+/* LocalHire payments UI: checkout summary, status badges, dialogs, transaction history, earnings.
+   Self-contained so it works on both the classic pages (style.css) and the marketplace pages (marketplace.css). */
+.pay-overlay {
+  position: fixed; inset: 0; z-index: 9000; display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(16, 24, 40, .55); backdrop-filter: blur(4px); padding: 0; animation: payFade .18s ease-out;
+}
+@keyframes payFade { from { opacity: 0 } to { opacity: 1 } }
+.pay-modal {
+  width: 100%; max-width: 480px; max-height: 92vh; overflow-y: auto; background: #fff; color: #101828;
+  border-radius: 20px 20px 0 0; padding: 22px 20px 20px; box-shadow: 0 24px 48px -12px rgba(16, 24, 40, .35);
+  font-family: 'Poppins', system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.5; text-align: left;
+}
+@media (min-width: 560px) {
+  .pay-overlay { align-items: center; padding: 16px; }
+  .pay-modal { border-radius: 18px; padding: 26px 26px 22px; }
+}
+.pay-modal h3 { margin: 0 0 4px; font-size: 18px; font-weight: 600; color: #101828; }
+.pay-modal p { margin: 0; }
+.pay-sub { color: #667085; font-size: 13px; }
+.pay-x { float: right; margin: -6px -6px 0 8px; background: none; border: 0; font-size: 26px; line-height: 1; color: #667085; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
+.pay-x:hover { background: #f2f4f7; }
+.pay-modal :focus-visible { outline: 3px solid rgba(91, 61, 245, .55); outline-offset: 2px; }
+
+.pay-party { display: flex; align-items: center; gap: 12px; margin: 16px 0 10px; padding: 12px; border: 1px solid #e4e7ec; border-radius: 12px; }
+.pay-avatar { width: 42px; height: 42px; border-radius: 50%; background: #efecff; color: #4a2fd9; display: flex; align-items: center; justify-content: center; font-weight: 700; flex: none; overflow: hidden; }
+.pay-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.pay-party strong { display: block; font-weight: 600; }
+.pay-booking { margin: 0 0 14px; padding: 10px 12px; background: #f9fafb; border-radius: 10px; font-size: 13px; color: #344054; }
+.pay-booking div + div { margin-top: 2px; }
+.pay-booking b { font-weight: 600; color: #101828; }
+
+.pay-table { width: 100%; margin: 4px 0 6px; border-collapse: collapse; }
+.pay-table td { padding: 7px 0; font-size: 14px; border-bottom: 1px solid #f2f4f7; vertical-align: top; }
+.pay-table td:last-child { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pay-table small { display: block; color: #667085; font-size: 12px; }
+.pay-table tr.pay-total td { border-bottom: 0; padding-top: 12px; font-size: 17px; font-weight: 700; }
+
+.pay-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; background: #f9fafb; color: #475467; }
+.pay-note.warn { background: #fff4e5; color: #93370d; }
+.pay-note.err { background: #fdecea; color: #912018; }
+.pay-note.ok { background: #e3f6ee; color: #0b5f43; }
+.pay-note.info { background: #eff8ff; color: #175cd3; }
+
+.pay-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+.pay-actions > * { flex: 1 1 140px; }
+.pay-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; padding: 0 18px; border-radius: 12px;
+  border: 1px solid transparent; font: inherit; font-weight: 600; font-size: 15px; cursor: pointer; text-decoration: none;
+}
+.pay-btn.primary { background: #5b3df5; color: #fff; box-shadow: 0 6px 16px -6px rgba(91, 61, 245, .7); }
+.pay-btn.primary:hover:not([disabled]) { background: #4a2fd9; }
+.pay-btn.ghost { background: #fff; color: #101828; border-color: #d0d5dd; }
+.pay-btn.danger { background: #fff; color: #b42318; border-color: #fda29b; }
+.pay-btn.good { background: #12805c; color: #fff; }
+.pay-btn[disabled] { opacity: .55; cursor: not-allowed; }
+.pay-btn.sm { min-height: 38px; font-size: 13px; padding: 0 14px; border-radius: 10px; }
+
+.pay-field { display: block; margin-top: 14px; }
+.pay-field span { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #344054; }
+.pay-field input, .pay-field textarea { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 10px; background: #fff; color: #101828; }
+.pay-field textarea { min-height: 96px; resize: vertical; }
+
+.pay-spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #e4e7ec; border-top-color: #5b3df5; animation: paySpin .8s linear infinite; margin: 26px auto; }
+@keyframes paySpin { to { transform: rotate(360deg) } }
+.pay-center { text-align: center; padding: 8px 0; }
+.pay-big-icon { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 6px auto 12px; font-size: 28px; }
+.pay-big-icon.ok { background: #e3f6ee; color: #12805c; }
+.pay-big-icon.err { background: #fdecea; color: #b42318; }
+.pay-big-icon.wait { background: #eff8ff; color: #175cd3; }
+
+/* Badges */
+.pay-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; background: #f2f4f7; color: #344054; }
+.pay-badge.ok { background: #e3f6ee; color: #0b5f43; }
+.pay-badge.warn { background: #fff4e5; color: #93370d; }
+.pay-badge.err { background: #fdecea; color: #912018; }
+.pay-badge.info { background: #eff8ff; color: #175cd3; }
+
+/* Inline status block used inside booking cards */
+.pay-status { margin-top: 1rem; border-top: 1px dashed rgba(0, 0, 0, .12); padding-top: 1rem; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.pay-status .pay-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.pay-status .pay-hint { color: #667085; font-size: 12.5px; }
+.pay-status .pay-btn { width: 100%; }
+
+/* Transaction history + earnings (marketplace pages) */
+.pay-card { background: #fff; border: 1px solid #e4e7ec; border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); }
+.pay-list { display: grid; gap: 12px; }
+.pay-tx { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: start; text-align: left; width: 100%; font: inherit; color: inherit; cursor: pointer; }
+.pay-tx:hover { border-color: #b2a5fb; }
+.pay-tx .t { font-weight: 600; }
+.pay-tx .m { color: #667085; font-size: 13px; }
+.pay-tx .a { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pay-tx .b { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.pay-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+@media (min-width: 760px) { .pay-stats { grid-template-columns: repeat(4, 1fr); } }
+.pay-stat { background: #fff; border: 1px solid #e4e7ec; border-radius: 14px; padding: 14px; }
+.pay-stat b { display: block; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pay-stat span { color: #667085; font-size: 12.5px; }
+.pay-stat small { display: block; color: #98a2b3; font-size: 11.5px; margin-top: 2px; }
+.pay-timeline { list-style: none; margin: 8px 0 0; padding: 0; }
+.pay-timeline li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #f2f4f7; font-size: 13px; }
+.pay-timeline time { color: #667085; font-size: 12px; white-space: nowrap; }
+.pay-empty { text-align: center; padding: 36px 16px; color: #667085; }
+.pay-empty h3 { color: #101828; margin-bottom: 4px; }
+.pay-table-wide { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.pay-table-wide th { text-align: left; font-size: 12px; color: #667085; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid #e4e7ec; white-space: nowrap; }
+.pay-table-wide td { padding: 10px; border-bottom: 1px solid #f2f4f7; vertical-align: top; }
+.pay-table-wide td.num, .pay-table-wide th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pay-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Review dialog: star rating input */
+.rv-stars { display: flex; gap: 4px; margin: 12px 0 2px; }
+.rv-stars button { width: 44px; height: 44px; border: 0; background: transparent; font-size: 32px; line-height: 1; color: #d0d5dd; cursor: pointer; border-radius: 8px; padding: 0; }
+.rv-stars button.on { color: #f5a524; }
+.rv-stars button:hover { transform: scale(1.08); }
+.rv-stars button:focus-visible { outline: 3px solid rgba(91, 61, 245, .55); outline-offset: 2px; }

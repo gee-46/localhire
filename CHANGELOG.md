@@ -171,3 +171,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-12T10:35:42+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Unified payment gateway processing with Razorpay orders, HMAC-SHA256 signature verification, idempotency locks, and webhook handler.
+
+### [2026-11-12] feat(ui): add responsive payment portal and checkout interface
+- **Date:** 2026-11-12T15:30:18+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Built customer checkout experience with Razorpay modal checkout integration, order status indicators, and payment receipt views.

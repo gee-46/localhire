@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payments | LocalHire</title>
+    <meta name="theme-color" content="#5b3df5">
+    <link rel="stylesheet" href="../css/marketplace.css">
+    <link rel="stylesheet" href="../css/comm.css">
+    <link rel="stylesheet" href="../css/payments.css">
+</head>
+<body class="lh">
+    <div id="lh-header"></div>
+
+    <main id="main" class="lh-main">
+        <div class="lh-container" style="padding-top:20px;padding-bottom:32px;max-width:860px">
+            <nav aria-label="Breadcrumb" class="lh-help"><a class="lh-link" href="customer-home.html">Home</a> / <span>Payments</span></nav>
+            <h1 class="display" style="font-size:30px;line-height:1.2;margin-top:6px">Your payments</h1>
+            <p class="lh-help" style="font-size:14px">Every payment you have made on LocalHire, with refunds. Only you can see this page.</p>
+
+            <div id="pay-summary" class="pay-stats" style="margin-top:16px" hidden></div>
+            <div id="pay-error" class="pay-note err" role="alert" hidden style="margin-top:16px"></div>
+            <div id="pay-list" class="pay-list" style="margin-top:16px" aria-live="polite"><div class="pay-spin" role="status" aria-label="Loading payments"></div></div>
+        </div>
+    </main>
+
+    <div id="lh-bottom"></div>
+
+    <script src="../js/data.js"></script>
+    <script src="../js/geo.js"></script>
+    <script src="../js/api.js"></script>
+    <script src="../js/app.js"></script>
+    <script src="../js/marketplace.js"></script>
+    <script src="../js/notifications.js"></script>
+    <script src="../js/payments.js"></script>
+    <script>
+    (async () => {
+        const g = LH.guard({ requireLogin: true });
+        if (g.redirected) return;
+        const P = window.LocalHirePayments;
+        const $ = (s) => document.querySelector(s);
+        LH.renderHeader($('#lh-header'), { active: 'payments' });
+        LH.renderBottomNav($('#lh-bottom'), 'account');
+
+        const TYPE_LABEL = {
+            ORDER_CREATED: 'Payment started', CAPTURED: 'Payment received', FAILED: 'Payment failed', REFUND_INITIATED: 'Refund requested',
+            REFUND_PROCESSED: 'Refund completed', REFUND_FAILED: 'Refund failed', DUPLICATE_PAYMENT_REFUNDED: 'Duplicate payment refunded',
+            DISPUTE_OPENED: 'Dispute opened', COMPLETION_CONFIRMED: 'You confirmed the service'
+        };
+        let rows = [];
+
+        const render = () => {
+            const list = $('#pay-list');
+            if (!rows.length) {
+                list.innerHTML = '<div class="pay-card pay-empty"><h3>No payments yet</h3><p>When you pay for a booking, the receipt and any refund will appear here.</p><p style="margin-top:14px"><a class="pay-btn primary" href="my-jobs.html">Go to my bookings</a></p></div>';
+                return;
+            }
+            list.innerHTML = rows.map((p, i) => `
+                <button type="button" class="pay-card pay-tx" data-i="${i}" aria-label="View details for ${P.esc(p.bookingNumber)}">
+                    <div><div class="t">${P.esc(p.service)}</div><div class="m">${P.esc(p.workerName)} · ${P.esc(p.bookingNumber)}</div>
+                    <div class="m">${P.esc(P.when(p.capturedAt || p.createdAt))}${p.methodDetail ? ' · ' + P.esc(p.methodDetail) : ''}</div></div>
+                    <div class="a">${P.inr(p.totalAmount)}</div>
+                    <div class="b">${P.badge(p.state)}${P.refundBadge(p.refundStatus)}${p.disputed ? '<span class="pay-badge warn">Dispute open</span>' : ''}${p.amountRefunded > 0 ? `<span class="pay-badge">${P.inr(p.amountRefunded)} refunded</span>` : ''}</div>
+                </button>`).join('');
+            const paid = rows.filter((r) => ['CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(r.state));
+            const spent = paid.reduce((a, r) => a + r.totalAmount, 0);
+            const refunded = paid.reduce((a, r) => a + r.amountRefunded, 0);
+            const box = $('#pay-summary');
+            box.hidden = false;
+            box.innerHTML = `
+                <div class="pay-stat"><b>${P.inr(spent)}</b><span>Total paid</span></div>
+                <div class="pay-stat"><b>${P.inr(refunded)}</b><span>Refunded</span></div>
+                <div class="pay-stat"><b>${P.inr(spent - refunded)}</b><span>Net spent</span></div>
+                <div class="pay-stat"><b>${paid.length}</b><span>Payments</span></div>`;
+        };
+
+        const showDetail = async (row) => {
+            const dlg = P.dialog('<div class="pay-spin" role="status" aria-label="Loading"></div>');
+            const r = await P.call('GET', `/payments/${row.id}`);
+            if (!r.ok) {
+                dlg.set(`<button class="pay-x" type="button" aria-label="Close" data-x>&times;</button><h3 id="pay-title">Could not load this payment</h3><div class="pay-note err" role="alert">${P.esc(r.data.message || 'Please try again.')}</div>`);
+            } else {
+                const d = r.data.payment;
+                dlg.set(`
+                    <button class="pay-x" type="button" aria-label="Close" data-x>&times;</button>
+                    <h3 id="pay-title">Payment ${P.esc(d.paymentNumber)}</h3>
+                    <p class="pay-sub">${P.badge(d.state)} ${P.refundBadge(d.refundStatus)}</p>
+                    <div class="pay-booking" style="margin-top:14px">
+                        <div><b>${P.esc(d.service)}</b></div><div>Professional: ${P.esc(d.workerName)}</div>
+                        <div>Booking ${P.esc(d.bookingNumber)} · ${P.esc(P.day(d.scheduledAt))}${d.timeSlot && d.timeSlot !== 'Flexible' ? ' · ' + P.esc(d.timeSlot) : ''}</div>
+                        ${d.address ? `<div>${P.esc(d.address)}</div>` : ''}
+                    </div>
+                    <table class="pay-table" aria-label="Amounts"><tbody>
+                        <tr><td>Service amount</td><td>${P.inr(d.serviceAmount)}</td></tr>
+                        ${d.platformFee > 0 ? `<tr><td>Platform fee</td><td>${P.inr(d.platformFee)}</td></tr>` : ''}
+                        ${d.taxAmount > 0 ? `<tr><td>Taxes</td><td>${P.inr(d.taxAmount)}</td></tr>` : ''}
+                        <tr class="pay-total"><td>Total${d.state === 'CAPTURED' || d.state === 'PARTIALLY_REFUNDED' || d.state === 'REFUNDED' ? ' paid' : ''}</td><td>${P.inr(d.totalAmount)}</td></tr>
+                        ${d.amountRefunded > 0 ? `<tr><td>Refunded</td><td>− ${P.inr(d.amountRefunded)}</td></tr>` : ''}
+                    </tbody></table>
+                    <p class="pay-sub">Paid ${d.capturedAt ? P.esc(P.when(d.capturedAt)) : 'not completed'}${d.methodDetail ? ' with ' + P.esc(d.methodDetail) : ''}</p>
+                    ${d.failureReason ? `<div class="pay-note err">${P.esc(d.failureReason)}</div>` : ''}
+                    ${d.refunds.length ? `<h4 style="margin:16px 0 4px;font-size:14px">Refunds</h4>${d.refunds.map((x) => `<div class="pay-note" style="margin-top:6px"><b>${P.inr(x.amount)}</b> · ${P.esc(({ PENDING: 'in progress', PROCESSED: 'completed', FAILED: 'failed' })[x.status] || x.status)} · ${P.esc(P.when(x.processedAt || x.createdAt))}${x.reason ? `<br>${P.esc(x.reason)}` : ''}${x.status === 'PENDING' ? '<br>Refunds usually reach your account within 5-7 working days.' : ''}</div>`).join('')}` : ''}
+                    <h4 style="margin:16px 0 0;font-size:14px">Activity</h4>
+                    <ul class="pay-timeline">${d.timeline.map((t) => `<li><span>${P.esc(TYPE_LABEL[t.type] || t.type)}${t.amount ? ' · ' + P.inr(t.amount) : ''}</span><time>${P.esc(P.when(t.at))}</time></li>`).join('')}</ul>
+                    <div class="pay-actions"><a class="pay-btn ghost" href="my-jobs.html">Go to my bookings</a><button class="pay-btn primary" type="button" data-x autofocus>Close</button></div>`);
+            }
+            dlg.el.addEventListener('click', (e) => { if (e.target.closest('[data-x]')) dlg.close('x'); });
+        };
+
+        $('#pay-list').addEventListener('click', (e) => {
+            const b = e.target.closest('[data-i]');
+            if (b) showDetail(rows[Number(b.dataset.i)]);
+        });
+
+        const r = await P.call('GET', '/payments/history');
+        if (!r.ok) {
+            $('#pay-list').innerHTML = '';
+            const err = $('#pay-error'); err.hidden = false; err.textContent = r.data.message || 'Your payments could not be loaded.';
+            return;
+        }
+        rows = r.data.payments || [];
+        render();
+    })();
+    </script>
+</body>
+</html>
