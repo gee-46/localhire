@@ -176,3 +176,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-12T15:30:18+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Built customer checkout experience with Razorpay modal checkout integration, order status indicators, and payment receipt views.
+
+### [2026-11-12] feat(payouts): implement Razorpay route client and automated account checks
+- **Date:** 2026-11-12T20:25:50+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added Razorpay Route linked-account API client and CLI diagnostic check script for testing account transfer capabilities.
