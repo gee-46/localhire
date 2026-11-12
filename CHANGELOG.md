@@ -166,3 +166,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-11T19:10:15+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added automated governance tests for admin privilege checks, user suspension enforcement, and profile access control.
+
+### [2026-11-12] feat(payments): implement unified Razorpay payment service and webhook processor
+- **Date:** 2026-11-12T10:35:42+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Unified payment gateway processing with Razorpay orders, HMAC-SHA256 signature verification, idempotency locks, and webhook handler.

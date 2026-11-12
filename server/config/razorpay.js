@@ -1,5 +1,6 @@
-// LocalHire - Razorpay Gateway Configuration & Security Utilities
-// Official Razorpay Node.js SDK integration with HMAC SHA256 signature verification.
+// LocalHire - Razorpay configuration and cryptographic helpers.
+// Secrets are read from the server environment only and are never sent to a browser. The only value exposed to
+// the frontend is the public key id. There is no simulated gateway: development uses Razorpay TEST mode keys.
 
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
@@ -10,21 +11,18 @@ const getRazorpayCredentials = () => ({
   webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || null
 });
 
+const isPlaceholder = (v) => !v || v.includes('replace_with') || v.includes('your_');
+
 const isRazorpayConfigured = () => {
   const { keyId, keySecret } = getRazorpayCredentials();
-  return Boolean(
-    keyId &&
-    keySecret &&
-    !keyId.includes('replace_with') &&
-    !keyId.includes('your_') &&
-    !keySecret.includes('replace_with') &&
-    !keySecret.includes('your_')
-  );
+  return !isPlaceholder(keyId) && !isPlaceholder(keySecret);
 };
 
-const isSimulationAllowed = () => {
-  const mode = (process.env.ESCROW_PAYMENT_MODE || '').toUpperCase();
-  return mode === 'SIMULATED' && process.env.NODE_ENV !== 'production';
+// 'test' (rzp_test_...) or 'live' (rzp_live_...); null when not configured.
+const getRazorpayMode = () => {
+  const { keyId } = getRazorpayCredentials();
+  if (isPlaceholder(keyId)) return null;
+  return keyId.startsWith('rzp_live_') ? 'live' : 'test';
 };
 
 let razorpayInstance = null;
@@ -33,13 +31,11 @@ const getRazorpayInstance = () => {
   if (razorpayInstance) return razorpayInstance;
   if (!isRazorpayConfigured()) return null;
   const { keyId, keySecret } = getRazorpayCredentials();
-  razorpayInstance = new Razorpay({
-    key_id: keyId,
-    key_secret: keySecret
-  });
+  razorpayInstance = new Razorpay({ key_id: keyId, key_secret: keySecret });
   return razorpayInstance;
 };
 
+// Test hook: inject a fake gateway (or null to reset).
 const setRazorpayInstance = (instance) => {
   razorpayInstance = instance;
 };
@@ -53,45 +49,32 @@ const safeCompare = (a, b) => {
   return crypto.timingSafeEqual(bufA, bufB);
 };
 
-// Verify payment signature: HMAC SHA256 of order_id + "|" + payment_id
+// Checkout success signature: HMAC-SHA256(order_id + "|" + payment_id, key_secret).
+// `orderId` must be the order id stored on the SERVER, never the one echoed by the browser.
 const verifyPaymentSignature = ({ orderId, paymentId, signature }) => {
   if (!orderId || !paymentId || !signature) return false;
-
   const { keySecret } = getRazorpayCredentials();
   if (!keySecret) return false;
-
-  const payload = `${orderId}|${paymentId}`;
-  const expectedSignature = crypto
-    .createHmac('sha256', keySecret)
-    .update(payload)
-    .digest('hex');
-
-  return safeCompare(expectedSignature, signature);
+  const expected = crypto.createHmac('sha256', keySecret).update(`${orderId}|${paymentId}`).digest('hex');
+  return safeCompare(expected, signature);
 };
 
-// Verify webhook signature against raw byte body
+// Webhook signature: HMAC-SHA256(raw request body, webhook secret). The body must be the exact bytes received.
 const verifyWebhookSignature = ({ rawBody, signature }) => {
   if (!rawBody || !signature) return false;
-
   const { webhookSecret } = getRazorpayCredentials();
   if (!webhookSecret) return false;
-
-  const expectedSignature = crypto
-    .createHmac('sha256', webhookSecret)
-    .update(rawBody)
-    .digest('hex');
-
-  return safeCompare(expectedSignature, signature);
+  const expected = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+  return safeCompare(expected, signature);
 };
 
 module.exports = {
   getRazorpayCredentials,
   isRazorpayConfigured,
-  isSimulationAllowed,
+  getRazorpayMode,
   getRazorpayInstance,
   setRazorpayInstance,
   verifyPaymentSignature,
   verifyWebhookSignature,
   safeCompare
 };
-
