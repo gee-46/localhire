@@ -1,4 +1,6 @@
 const prisma = require('../config/prisma');
+const { notifyUser } = require('./notificationController');
+const { getWorkerEligibility, NOT_VERIFIED_CODE, NOT_VERIFIED_MESSAGE, SELF_NOT_VERIFIED_MESSAGE } = require('../services/workerEligibility');
 
 const statusMap = {
   PENDING: 'Pending',
@@ -35,6 +37,14 @@ exports.createApplication = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Quote must be a valid positive number' });
     }
 
+    // Quoting leads to hiring, so it needs the same verification as a booking. (Admins acting on behalf are exempt.)
+    if (req.user.role === 'Worker') {
+      const eligibility = await getWorkerEligibility(req.user.id);
+      if (!eligibility.eligible) {
+        return res.status(403).json({ success: false, code: NOT_VERIFIED_CODE, message: SELF_NOT_VERIFIED_MESSAGE });
+      }
+    }
+
     const jobExists = await prisma.jobPost.findUnique({ where: { id: String(jobId) } });
     if (!jobExists) {
       return res.status(404).json({ success: false, message: 'Job not found' });
@@ -60,15 +70,7 @@ exports.createApplication = async (req, res) => {
         status: 'PENDING'
       },
       include: {
-        worker: {
-          select: {
-            id: true,
-            name: true,
-            avatarUrl: true,
-            email: true,
-            role: true
-          }
-        }
+        worker: { select: { id: true, name: true, avatarUrl: true } }
       }
     });
 
@@ -85,23 +87,24 @@ exports.createApplication = async (req, res) => {
   }
 };
 
-// @desc    Get applications for a job (Customer view)
+// @desc    Get applications for a job (the posting customer, or an admin)
 // @route   GET /api/applications/job/:jobId
-// @access  Private
+// @access  Private (Customer who owns the job, Admin)
+// A job that does not exist and a job that belongs to someone else get the SAME answer, so this endpoint cannot be used
+// to discover which job ids exist or who owns them.
+const JOB_NOT_FOUND = { success: false, message: 'Job not found' };
+
 exports.getApplicationsForJob = async (req, res) => {
   try {
+    const job = await prisma.jobPost.findUnique({ where: { id: String(req.params.jobId) }, select: { customerId: true } });
+    if (!job || (req.user.role !== 'Admin' && job.customerId !== req.user.id)) {
+      return res.status(404).json(JOB_NOT_FOUND);
+    }
+
     const apps = await prisma.jobApplication.findMany({
       where: { jobId: req.params.jobId },
       include: {
-        worker: {
-          select: {
-            id: true,
-            name: true,
-            avatarUrl: true,
-            email: true,
-            role: true
-          }
-        }
+        worker: { select: { id: true, name: true, avatarUrl: true } }
       },
       orderBy: { createdAt: 'desc' }
     });
@@ -152,7 +155,7 @@ exports.acceptQuote = async (req, res) => {
       where: { id: req.params.id },
       include: {
         job: true,
-        worker: true
+        worker: { select: { id: true, name: true, avatarUrl: true } }
       }
     });
 
@@ -162,6 +165,12 @@ exports.acceptQuote = async (req, res) => {
 
     if (app.job.customerId !== req.user.id && req.user.role !== 'Admin') {
       return res.status(403).json({ success: false, message: 'Only the customer who posted the job can accept quotes.' });
+    }
+
+    // A worker whose verification was withdrawn since quoting can no longer be hired.
+    const eligibility = await getWorkerEligibility(app.workerId);
+    if (!eligibility.eligible) {
+      return res.status(409).json({ success: false, code: NOT_VERIFIED_CODE, message: NOT_VERIFIED_MESSAGE });
     }
 
     const updatedApp = await prisma.jobApplication.update({
@@ -174,9 +183,34 @@ exports.acceptQuote = async (req, res) => {
       data: { status: 'IN_PROGRESS' }
     });
 
+    // The worker's quote is their confirmed price: create the booking (once per job) so the customer can pay for it
+    // through the normal payment flow.
+    let booking = await prisma.booking.findFirst({ where: { jobPostId: app.jobId } });
+    const createdNow = !booking;
+    if (!booking) {
+      booking = await prisma.booking.create({
+        data: {
+          bookingNumber: `BK-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
+          customerId: app.job.customerId, workerId: app.workerId, jobPostId: app.jobId, addressId: app.job.addressId || null,
+          status: 'CONFIRMED', priceConfirmedAt: new Date(), agreedPrice: app.quoteAmount,
+          scheduledAt: app.job.scheduledDate || new Date(Date.now() + 24 * 3600 * 1000), timeSlot: app.job.scheduledSlot || 'Flexible',
+          problemDescription: String(app.job.description || '').slice(0, 1000) || null,
+          statusHistory: { create: { fromStatus: 'REQUESTED', toStatus: 'CONFIRMED', changedById: req.user.id, reason: 'Customer accepted the professional\'s quote' } }
+        }
+      });
+    }
+
+    if (createdNow) {
+      await notifyUser({
+        userId: app.workerId, type: 'QUOTE_ACCEPTED', bookingId: booking.id, title: 'Your quote was accepted',
+        message: `${req.user.name || 'The customer'} accepted your quote of ₹${Number(app.quoteAmount)} for "${String(app.job.title || 'their job').slice(0, 80)}". They can now pay to secure the booking.`
+      });
+    }
+
     res.json({
       success: true,
-      message: 'Quote accepted successfully! Job status updated to In Progress.',
+      message: 'Quote accepted. You can now pay for the booking.',
+      bookingId: booking.id,
       application: formatApplication({
         ...updatedApp,
         worker: app.worker
