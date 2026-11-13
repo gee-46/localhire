@@ -191,3 +191,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-13T16:10:45+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Implemented worker business hours availability filters and spatial discovery ranking prioritizing verified, active providers.
+
+### [2026-11-13] test(jobs): add job board privacy and applicant authorization test suites
+- **Date:** 2026-11-13T21:05:12+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added test suites verifying that contact information remains concealed until job confirmation and enforcing authorization checks.
