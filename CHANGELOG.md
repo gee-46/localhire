@@ -186,3 +186,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-13T11:15:30+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added job applications controller with strict customer/worker isolation, ensuring applicants only view permitted job details.
+
+### [2026-11-13] feat(discovery): implement worker working hours and spatial discovery ranking
+- **Date:** 2026-11-13T16:10:45+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Implemented worker business hours availability filters and spatial discovery ranking prioritizing verified, active providers.
