@@ -206,3 +206,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-14T15:05:10+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added commission ledger history tests and created administrative user promotion script for staging environments.
+
+### [2026-11-14] chore(ops): add worker storage verification utility and VAPID key generators
+- **Date:** 2026-11-14T19:55:35+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added operational scripts for verifying Supabase private storage policies, generating VAPID Web Push keypairs, and dev auth maintenance.
