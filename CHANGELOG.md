@@ -201,3 +201,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-14T10:45:20+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Integrated client-side chart visualizations for revenue, completed jobs, and category distribution in the admin portal.
+
+### [2026-11-14] feat(finance): add platform commission audit history and verification test suite
+- **Date:** 2026-11-14T15:05:10+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Added commission ledger history tests and created administrative user promotion script for staging environments.
