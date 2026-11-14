@@ -196,3 +196,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-13T21:05:12+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added test suites verifying that contact information remains concealed until job confirmation and enforcing authorization checks.
+
+### [2026-11-14] feat(analytics): add admin visual charts and real-time dashboard metrics
+- **Date:** 2026-11-14T10:45:20+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Integrated client-side chart visualizations for revenue, completed jobs, and category distribution in the admin portal.
