@@ -211,3 +211,8 @@ All notable changes and milestones across development phases from November 1 to 
 - **Date:** 2026-11-14T19:55:35+05:30
 - **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
 - **Details:** Added operational scripts for verifying Supabase private storage policies, generating VAPID Web Push keypairs, and dev auth maintenance.
+
+### [2026-11-15] docs(deployment): add comprehensive deployment operating procedures and rollback checklist
+- **Date:** 2026-11-15T11:30:45+05:30
+- **Author:** Gautam N Chipkar <gautamchipkar46@gmail.com>
+- **Details:** Documented comprehensive staging and production deployment runbook, environment variable checklist, backup protocols, and rollback plans.
