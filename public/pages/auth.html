@@ -23,7 +23,7 @@
         <div class="glass-card animate-fade-in" style="width: 100%; max-width: 450px; padding: 3rem 2rem;">
             <div class="flex items-center justify-between" style="margin-bottom: 2rem;">
                 <h2 id="auth-title" style="font-size: 1.8rem; margin: 0;">Welcome Back</h2>
-                <div class="flex bg-card p-1 rounded-full" style="background: rgba(15, 23, 42, 0.6); border-radius: 9999px; padding: 4px;">
+                <div id="auth-tabs" class="flex bg-card p-1 rounded-full" style="background: rgba(15, 23, 42, 0.6); border-radius: 9999px; padding: 4px;">
                     <button id="tab-login" class="btn" style="padding: 0.5rem 1.5rem; border-radius: 9999px; background: var(--primary); color: white;">Log In</button>
                     <button id="tab-signup" class="btn text-muted" style="padding: 0.5rem 1.5rem; border-radius: 9999px; background: transparent;">Sign Up</button>
                 </div>
@@ -39,12 +39,15 @@
                 <div class="input-group" style="margin-top: 1.5rem;">
                     <div class="flex justify-between">
                         <label class="input-label" for="login-password">Password</label>
-                        <a href="#" style="font-size: 0.85rem; color: var(--primary); text-decoration: none;">Forgot password?</a>
+                        <a href="#" id="forgot-link" style="font-size: 0.85rem; color: var(--primary); text-decoration: none;">Forgot password?</a>
                     </div>
                     <input type="password" id="login-password" class="input-control" placeholder="••••••••" required>
                 </div>
                 
                 <p id="login-error" class="text-muted" style="color: #ef4444; display: none; margin-top: 1rem; font-size: 0.875rem; text-align: center;"></p>
+                <div id="login-resend" style="display: none; text-align: center; margin-top: 0.5rem;">
+                    <a href="#" id="login-resend-link" style="font-size: 0.85rem; color: var(--primary); text-decoration: none;">Resend verification email</a>
+                </div>
 
                 <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 2rem; padding: 1rem; font-size: 1.1rem;">
                     Sign In
@@ -86,7 +89,7 @@
                 
                 <div class="input-group">
                     <label class="input-label" for="signup-password">Password</label>
-                    <input type="password" id="signup-password" class="input-control" placeholder="Create a password" required>
+                    <input type="password" id="signup-password" class="input-control" placeholder="At least 8 characters" minlength="8" maxlength="72" autocomplete="new-password" required>
                 </div>
                 
                 <p id="signup-error" class="text-muted" style="color: #ef4444; display: none; margin-top: 1rem; font-size: 0.875rem; text-align: center;"></p>
@@ -96,13 +99,49 @@
                 </button>
             </form>
 
-            <div style="margin-top: 2rem; text-align: center;">
+            <!-- Forgot Password Form -->
+            <form id="forgot-form" style="display: none;">
+                <p class="text-muted" style="font-size: 0.9rem; margin-bottom: 1.5rem;">Enter the email you registered with and we'll send you a link to reset your password.</p>
+                <div class="input-group">
+                    <label class="input-label" for="forgot-email">Email Address</label>
+                    <input type="email" id="forgot-email" class="input-control" placeholder="you@example.com" required>
+                </div>
+                <p id="forgot-error" class="text-muted" style="color: #ef4444; display: none; margin-top: 1rem; font-size: 0.875rem; text-align: center;"></p>
+                <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 2rem; padding: 1rem; font-size: 1.1rem;">Send Reset Link</button>
+                <p style="text-align: center; margin-top: 1rem;"><a href="#" class="back-to-login" style="font-size: 0.85rem; color: var(--primary); text-decoration: none;">Back to log in</a></p>
+            </form>
+
+            <!-- Reset Password Form (reached from the emailed recovery link) -->
+            <form id="reset-form" style="display: none;">
+                <p class="text-muted" style="font-size: 0.9rem; margin-bottom: 1.5rem;">Choose a new password for your account.</p>
+                <div class="input-group">
+                    <label class="input-label" for="reset-password">New Password</label>
+                    <input type="password" id="reset-password" class="input-control" placeholder="At least 8 characters" minlength="8" maxlength="72" autocomplete="new-password" required>
+                </div>
+                <div class="input-group" style="margin-top: 1.5rem;">
+                    <label class="input-label" for="reset-confirm">Confirm Password</label>
+                    <input type="password" id="reset-confirm" class="input-control" placeholder="Repeat the password" minlength="8" maxlength="72" autocomplete="new-password" required>
+                </div>
+                <p id="reset-error" class="text-muted" style="color: #ef4444; display: none; margin-top: 1rem; font-size: 0.875rem; text-align: center;"></p>
+                <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 2rem; padding: 1rem; font-size: 1.1rem;">Update Password</button>
+            </form>
+
+            <!-- Status panel: check-your-email / verification result / reset link sent -->
+            <div id="info-panel" style="display: none; text-align: center;">
+                <h3 id="info-title" style="margin-bottom: 0.75rem;"></h3>
+                <p id="info-message" class="text-muted" style="font-size: 0.95rem;"></p>
+                <p id="info-feedback" class="text-muted" style="display: none; font-size: 0.85rem; margin-top: 1rem;"></p>
+                <button type="button" id="info-resend" class="btn btn-outline" style="display: none; margin-top: 1.5rem;">Resend verification email</button>
+                <p style="margin-top: 1.5rem;"><a href="#" class="back-to-login" style="font-size: 0.85rem; color: var(--primary); text-decoration: none;">Back to log in</a></p>
+            </div>
+
+            <div id="social-block" style="margin-top: 2rem; text-align: center;">
                 <div style="margin: 1.5rem 0; position: relative; text-align: center;">
                     <div style="position: absolute; top: 50%; left: 0; right: 0; background: var(--border-light); height: 1px;"></div>
                     <span style="background: var(--bg-card); padding: 0 1rem; position: relative; color: var(--text-muted); font-size: 0.85rem;">Or continue with</span>
                 </div>
                 
-                <button class="btn btn-outline" style="width: 100%; padding: 0.85rem;">
+                <button type="button" id="google-btn" class="btn btn-outline" style="width: 100%; padding: 0.85rem;">
                     <svg class="icon" viewBox="0 0 24 24" style="margin-right: 0.5rem;"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
                     Google
                 </button>
@@ -143,81 +182,267 @@
                 });
             });
 
-            // Tabs toggle
-            loginTab.addEventListener('click', () => {
-                loginForm.style.display = 'block';
-                signupForm.style.display = 'none';
-                authTitle.textContent = 'Welcome Back';
-                
-                loginTab.style.background = 'var(--primary)';
-                loginTab.style.color = 'white';
-                loginTab.classList.remove('text-muted');
-                
-                signupTab.style.background = 'transparent';
-                signupTab.classList.add('text-muted');
-                signupTab.style.color = '';
-            });
+            const forgotForm = document.getElementById('forgot-form');
+            const resetForm = document.getElementById('reset-form');
+            const infoPanel = document.getElementById('info-panel');
+            const authTabs = document.getElementById('auth-tabs');
+            const socialBlock = document.getElementById('social-block');
+            const loginResend = document.getElementById('login-resend');
+            const infoResend = document.getElementById('info-resend');
+            const infoFeedback = document.getElementById('info-feedback');
+            const api = window.localHireAPI;
 
-            signupTab.addEventListener('click', () => {
-                signupForm.style.display = 'block';
-                loginForm.style.display = 'none';
-                authTitle.textContent = 'Create Account';
-                
-                signupTab.style.background = 'var(--primary)';
-                signupTab.style.color = 'white';
-                signupTab.classList.remove('text-muted');
-                
-                loginTab.style.background = 'transparent';
-                loginTab.classList.add('text-muted');
-                loginTab.style.color = '';
-            });
+            let activeTab = 'login';
+            let pendingEmail = '';      // address a verification email was sent to
+            let recoveryToken = null;   // access token from the password-recovery link (memory only)
+
+            const showError = (el, message) => {
+                el.textContent = message;
+                el.style.color = '#ef4444';
+                el.style.display = 'block';
+            };
+            const showNotice = (el, message) => {
+                el.textContent = message;
+                el.style.color = '';
+                el.style.display = 'block';
+            };
+
+            // Where each existing role lands after authentication (the session is already stored here).
+            // Workers are routed by their onboarding state; existing workers with a profile keep their old landing page.
+            const pathForRole = async (user) => {
+                if (user.role === 'Admin') return 'admin-console.html';
+                if (user.role === 'Worker') {
+                    try {
+                        const status = await api.getWorkerStatus();
+                        if (status.state === 'NOT_STARTED' || status.state === 'DRAFT') return 'worker-onboarding.html';
+                        if (status.state === 'SUBMITTED') return 'worker-dashboard.html';
+                    } catch (e) {
+                        console.warn('[Auth] Could not read worker onboarding state:', e.message);
+                    }
+                }
+                if (user.role === 'Customer') return 'customer-home.html';
+                return '../index.html';
+            };
+
+            const hideAll = () => {
+                [loginForm, signupForm, forgotForm, resetForm, infoPanel].forEach(el => { el.style.display = 'none'; });
+            };
+
+            const setTabStyles = (tab) => {
+                const onLogin = tab === 'login';
+                loginTab.style.background = onLogin ? 'var(--primary)' : 'transparent';
+                loginTab.style.color = onLogin ? 'white' : '';
+                loginTab.classList.toggle('text-muted', !onLogin);
+                signupTab.style.background = onLogin ? 'transparent' : 'var(--primary)';
+                signupTab.style.color = onLogin ? '' : 'white';
+                signupTab.classList.toggle('text-muted', onLogin);
+            };
+
+            const showTab = (tab) => {
+                activeTab = tab;
+                hideAll();
+                authTabs.style.display = 'flex';
+                socialBlock.style.display = 'block';
+                (tab === 'login' ? loginForm : signupForm).style.display = 'block';
+                authTitle.textContent = tab === 'login' ? 'Welcome Back' : 'Create Account';
+                setTabStyles(tab);
+            };
+
+            // Forgot / reset / status views replace the tabs and the Google button
+            const showPanel = (panel, title) => {
+                hideAll();
+                authTabs.style.display = 'none';
+                socialBlock.style.display = 'none';
+                panel.style.display = 'block';
+                authTitle.textContent = title;
+            };
+
+            const showInfo = (title, message, options = {}) => {
+                document.getElementById('info-title').textContent = title;
+                document.getElementById('info-message').textContent = message;
+                infoFeedback.style.display = 'none';
+                infoResend.style.display = options.resend ? 'inline-flex' : 'none';
+                showPanel(infoPanel, 'LocalHire');
+            };
+
+            loginTab.addEventListener('click', () => showTab('login'));
+            signupTab.addEventListener('click', () => showTab('signup'));
+            document.querySelectorAll('.back-to-login').forEach(a => a.addEventListener('click', (e) => {
+                e.preventDefault();
+                recoveryToken = null;
+                showTab('login');
+            }));
 
             // Submit Login
             loginForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 loginError.style.display = 'none';
+                loginResend.style.display = 'none';
                 const email = document.getElementById('login-email').value;
                 const pass = document.getElementById('login-password').value;
-                
-                const api = window.localHireAPI || {
-                    login: async (em, pw) => window.localHireApp ? window.localHireApp.loginUser(em, pw) : { success: false }
-                };
+
                 const result = await api.login(email, pass);
                 if (result && result.success) {
-                    window.location.href = '../index.html';
+                    window.location.href = await pathForRole(result.user);
                 } else {
-                    loginError.textContent = (result && result.message) ? result.message : 'Invalid credentials';
-                    loginError.style.display = 'block';
+                    showError(loginError, (result && result.message) ? result.message : 'Invalid credentials');
+                    if (result && result.code === 'EMAIL_NOT_VERIFIED') {
+                        pendingEmail = String(result.email || email).trim().toLowerCase();
+                        loginResend.style.display = 'block';
+                    }
                 }
             });
 
-            // Submit Signup
+            document.getElementById('login-resend-link').addEventListener('click', async (e) => {
+                e.preventDefault();
+                const result = await api.resendVerification(pendingEmail);
+                const fallback = result.success ? 'Verification email sent.' : 'Could not send the email.';
+                (result.success ? showNotice : showError)(loginError, result.message || fallback);
+            });
+
+            // Submit Signup: no session is created until the email is verified
             signupForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 signupError.style.display = 'none';
-                
+
                 const name = document.getElementById('signup-name').value;
                 const email = document.getElementById('signup-email').value;
                 const phone = document.getElementById('signup-phone').value;
                 const pass = document.getElementById('signup-password').value;
                 const role = document.querySelector('input[name="role"]:checked').value;
 
-                const api = window.localHireAPI || {
-                    register: async (data) => window.localHireApp ? window.localHireApp.registerUser(data) : { success: false }
-                };
                 const result = await api.register({ name, email, phone, password: pass, role });
                 if (result && result.success) {
-                    if (role === 'Worker') {
-                        // After signing up, workers must fill out their profile
-                        window.location.href = 'edit-profile.html'; 
-                    } else {
-                        window.location.href = '../index.html';
-                    }
+                    pendingEmail = String(result.email || email).trim().toLowerCase();
+                    showInfo('Check your email', 'We sent a verification link to ' + pendingEmail + '. Open it to activate your account, then log in.', { resend: true });
                 } else {
-                    signupError.textContent = (result && result.message) ? result.message : 'Registration failed';
-                    signupError.style.display = 'block';
+                    showError(signupError, (result && result.message) ? result.message : 'Registration failed');
                 }
             });
+
+            infoResend.addEventListener('click', async () => {
+                const result = await api.resendVerification(pendingEmail);
+                const fallback = result.success ? 'Verification email sent.' : 'Could not send the email.';
+                (result.success ? showNotice : showError)(infoFeedback, result.message || fallback);
+            });
+
+            // Forgot password
+            document.getElementById('forgot-link').addEventListener('click', (e) => {
+                e.preventDefault();
+                document.getElementById('forgot-email').value = document.getElementById('login-email').value;
+                document.getElementById('forgot-error').style.display = 'none';
+                showPanel(forgotForm, 'Reset Password');
+            });
+
+            forgotForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const errorEl = document.getElementById('forgot-error');
+                errorEl.style.display = 'none';
+                const result = await api.forgotPassword(document.getElementById('forgot-email').value);
+                if (result.success) {
+                    showInfo('Check your email', result.message);
+                } else {
+                    showError(errorEl, result.message || 'Could not send the reset email.');
+                }
+            });
+
+            // Set a new password (recovery link)
+            resetForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const errorEl = document.getElementById('reset-error');
+                errorEl.style.display = 'none';
+                const password = document.getElementById('reset-password').value;
+                if (password !== document.getElementById('reset-confirm').value) {
+                    return showError(errorEl, 'Passwords do not match.');
+                }
+                const result = await api.resetPassword(recoveryToken, password);
+                if (result.success) {
+                    recoveryToken = null;
+                    resetForm.reset();
+                    showTab('login');
+                    showNotice(loginError, result.message);
+                } else {
+                    showError(errorEl, result.message || 'Could not update the password.');
+                }
+            });
+
+            // Continue with Google: the backend runs the OAuth flow; secrets never reach the browser.
+            // The account type is only sent from the Sign Up tab (it is needed to create a new account).
+            document.getElementById('google-btn').addEventListener('click', () => {
+                const role = activeTab === 'signup' ? document.querySelector('input[name="role"]:checked').value : '';
+                window.location.href = api.googleLoginUrl(role);
+            });
+
+            const GOOGLE_ERRORS = {
+                not_configured: 'Google sign-in is not configured on this server yet.',
+                invalid_role: 'Please choose a valid account type and try again.',
+                cancelled: 'Google sign-in was cancelled.',
+                session_expired: 'The Google sign-in session expired. Please try again.',
+                exchange_failed: 'Google sign-in could not be completed. Please try again.',
+                email_unverified: 'Your Google account email is not verified, so it cannot be used to sign in.',
+                account_conflict: 'This email is already linked to a different sign-in method. Log in with your email and password.',
+                account_disabled: 'This account has been deactivated.',
+                no_account: 'No LocalHire account exists for that Google account yet. Choose Sign Up, pick your account type, then continue with Google.',
+                provider_error: 'Google sign-in is temporarily unavailable. Please try again.',
+                server_error: 'Something went wrong during Google sign-in. Please try again.'
+            };
+
+            // Handle returns from email links and Google sign-in (all land here with a URL fragment)
+            const handleReturn = async () => {
+                const hash = window.location.hash ? window.location.hash.slice(1) : '';
+                if (!hash) return;
+                const params = new URLSearchParams(hash);
+                // Remove tokens from the address bar / history before doing anything else
+                history.replaceState(null, '', window.location.pathname + window.location.search);
+
+                if (params.get('lh_error')) {
+                    showTab('login');
+                    return showError(loginError, GOOGLE_ERRORS[params.get('lh_error')] || 'Google sign-in failed. Please try again.');
+                }
+
+                if (params.get('lh_token')) {
+                    showInfo('Signing you in…', 'Completing Google sign-in.');
+                    const result = await api.completeOAuthLogin(params.get('lh_token'));
+                    if (result.success) {
+                        window.location.href = await pathForRole(result.user);
+                    } else {
+                        showTab('login');
+                        showError(loginError, result.message);
+                    }
+                    return;
+                }
+
+                // Errors reported by Supabase for expired / reused email links
+                if (params.get('error')) {
+                    showTab('login');
+                    return showError(loginError, params.get('error_code') === 'otp_expired'
+                        ? 'That link has expired or was already used. Request a new verification or reset email.'
+                        : 'That link is not valid. Request a new verification or reset email.');
+                }
+
+                const accessToken = params.get('access_token');
+                const type = params.get('type');
+                if (!accessToken) return;
+
+                if (type === 'recovery') {
+                    recoveryToken = accessToken;
+                    document.getElementById('reset-error').style.display = 'none';
+                    return showPanel(resetForm, 'Choose New Password');
+                }
+
+                if (type === 'signup' || type === 'email_change' || type === 'invite') {
+                    showInfo('Verifying your email…', 'One moment.');
+                    const result = await api.verifyEmail(accessToken);
+                    if (result.success) {
+                        showInfo('Email verified', 'Your email address is verified. Redirecting…');
+                        window.location.href = await pathForRole(result.user);
+                    } else {
+                        showTab('login');
+                        showError(loginError, result.message || 'Verification failed. Request a new verification email.');
+                    }
+                }
+            };
+            handleReturn();
         });
     </script>
 </body>

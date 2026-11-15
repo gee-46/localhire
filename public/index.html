@@ -1,11 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+        // Safety net: if a Supabase email link lands on the Site URL root (redirect URL missing from the
+        // Supabase allow-list), hand the fragment to the auth page, which knows how to complete it.
+        if (/[#&](access_token|error_code|error)=/.test(window.location.hash)) {
+            window.location.replace('pages/auth.html' + window.location.hash);
+        } else {
+            // Customers have their own marketplace homepage; the landing page stays for visitors, workers and admins.
+            try {
+                var s = JSON.parse(sessionStorage.getItem('localHire_session') || 'null');
+                if (s && s.role === 'Customer' && sessionStorage.getItem('localHire_token')) window.location.replace('pages/customer-home.html');
+            } catch (e) { /* not logged in */ }
+        }
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LocalHire | Find Trusted Local Professionals</title>
     <link rel="stylesheet" href="css/style.css">
-    <link rel="stylesheet" href="css/escrow.css">
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <meta name="description" content="Connect with local workers like drivers, tutors, plumbers, and more instantly on LocalHire.">
@@ -82,7 +94,6 @@
     <script src="js/data.js"></script>
     <script src="js/api.js"></script>
     <script src="js/app.js"></script>
-    <script src="js/escrow.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', async () => {
             // Render Navbar
@@ -175,7 +186,7 @@
                 if (recommendedContainer && workersList) {
                     recommendedContainer.innerHTML = '';
                     const topWorkers = [...workersList]
-                        .sort((a, b) => b.rating - a.rating)
+                        .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0))
                         .slice(0, 3);
                     topWorkers.forEach(worker => {
                         recommendedContainer.innerHTML += createWorkerCard(worker, 'index');
@@ -210,7 +221,7 @@
                     homeMap = L.map('home-map').setView([lat, lng], 12);
                     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                         maxZoom: 19,
-                        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                     }).addTo(homeMap);
                     
                     markerLayer = L.layerGroup().addTo(homeMap);
@@ -228,31 +239,7 @@
                 });
                 L.marker([lat, lng], {icon: userIcon}).bindPopup('<b>You are here</b>').addTo(markerLayer);
 
-                // Add Worker Markers
-                (workers || []).forEach(worker => {
-                    const wLat = worker.lat || (worker.location && worker.location.coordinates ? worker.location.coordinates[1] : null);
-                    const wLng = worker.lng || (worker.location && worker.location.coordinates ? worker.location.coordinates[0] : null);
-                    const locText = typeof worker.location === 'string' ? worker.location : (worker.location && worker.location.address ? worker.location.address : 'Nearby');
-
-                    if (wLat && wLng) {
-                        const marker = L.marker([wLat, wLng]).addTo(markerLayer);
-                        
-                        const popupContent = `
-                            <div style="min-width: 200px; display: flex; flex-direction: column; gap: 8px;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <img src="${worker.avatarUrl}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">
-                                    <div>
-                                        <h4 style="margin: 0; font-size: 14px;">${worker.name}</h4>
-                                        <span style="font-size: 12px; color: #666;">${worker.category} • ${worker.rating}★</span>
-                                    </div>
-                                </div>
-                                <div style="font-size: 12px; color: #444;">Location: ${locText}</div>
-                                <a href="pages/profile.html?id=${worker.id || worker._id}" style="display: block; width: 100%; text-align: center; background: var(--primary); color: white; padding: 6px; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: bold; margin-top: 5px;">View Profile</a>
-                            </div>
-                        `;
-                        marker.bindPopup(popupContent);
-                    }
-                });
+                // Worker positions are private and are never plotted on public maps; this map shows only your own area.
             }
 
             // Check if user already granted location previously
@@ -291,7 +278,7 @@
                             recommendedContainer.innerHTML = '';
                             const updatedWorkers = await window.localHireAPI.getWorkers();
                             (updatedWorkers || [])
-                                .sort((a, b) => b.rating - a.rating)
+                                .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0))
                                 .slice(0, 3)
                                 .forEach(worker => {
                                     recommendedContainer.innerHTML += createWorkerCard(worker, 'index');

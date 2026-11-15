@@ -37,6 +37,25 @@ function renderStars(rating) {
   return `<div class="flex gap-1">${starsHtml}</div>`;
 }
 
+// A rating exists only when real customer reviews back it. Never show a default or placeholder rating.
+function hasGenuineRating(worker) {
+  return Boolean(worker) && Number(worker.reviewsCount || 0) > 0 && worker.rating !== null && worker.rating !== undefined && Number(worker.rating) > 0;
+}
+
+// Compact rating line for cards: stars + average + count, or an honest "no reviews yet".
+function renderRatingSummary(worker) {
+  if (!hasGenuineRating(worker)) {
+    return '<span class="text-muted" style="font-size: 0.8rem;">No reviews yet</span>';
+  }
+  const rating = Number(worker.rating);
+  return `${renderStars(rating)}
+            <span style="font-size: 0.9rem; font-weight: 600; color: var(--warning); margin-left: 0.25rem;">${rating.toFixed(1)}</span>
+            <span class="text-muted" style="font-size: 0.8rem; margin-left: 0.25rem;">(${Number(worker.reviewsCount)})</span>`;
+}
+if (typeof window !== 'undefined') {
+  window.hasGenuineRating = hasGenuineRating;
+}
+
 // Generate HTML for a Worker Card
 function createWorkerCard(worker, relativePath = '') {
   const availabilityText = worker.availability || 'Available Today';
@@ -62,12 +81,10 @@ function createWorkerCard(worker, relativePath = '') {
       <div class="flex items-center gap-4">
         <img src="${safeAvatar}" alt="${safeName}" style="width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--primary); padding: 2px; object-fit: cover; box-shadow: 0 4px 12px rgba(94, 234, 212, 0.2);">
         <div>
-          <h3 style="margin-bottom: 0; font-family: 'DM Serif Display', serif; font-size: 1.25rem;">${safeName}</h3>
+          <h3 style="margin-bottom: 0; font-family: 'DM Serif Display', serif; font-size: 1.25rem;">${safeName}${worker.isVerified ? ' <span class="badge badge-verified" title="Identity and documents verified by LocalHire" style="vertical-align: middle; font-family: inherit;">✓ Verified</span>' : ''}</h3>
           <p class="text-muted" style="margin-bottom: 0.35rem; font-size: 0.85rem;">${safeCategory} • ${safeExperience}</p>
           <div class="flex items-center gap-1">
-            ${renderStars(worker.rating || 5.0)}
-            <span style="font-size: 0.9rem; font-weight: 600; color: var(--warning); margin-left: 0.25rem;">${Number(worker.rating || 5.0)}</span>
-            <span class="text-muted" style="font-size: 0.8rem; margin-left: 0.25rem;">(${Number(worker.reviewsCount || 0)})</span>
+            ${renderRatingSummary(worker)}
           </div>
         </div>
       </div>
@@ -137,7 +154,8 @@ function createJobCard(job) {
   const safeStatus = escapeHTML(job.status || 'Open');
   const safeUrgency = escapeHTML(job.urgency || '');
   const safeDescription = escapeHTML(job.description || '');
-  const safeCustomer = escapeHTML(job.customerName || 'Client');
+  // The server only sends a poster's name to that poster (and admins); everyone else sees a neutral label.
+  const safeCustomer = escapeHTML(job.customerName || 'a customer');
   const safeLocation = escapeHTML(locationText);
   const safeBudget = escapeHTML(job.budget || 'Flexible');
 
@@ -183,7 +201,7 @@ function renderNavbar(targetElementId, currentPath = '') {
   // Determine relative paths for links depending on if we are in index or pages/
   const isIndex = currentPath === 'index';
   const prefix = isIndex ? 'pages/' : '';
-  const homeLink = isIndex ? '#' : '../index.html';
+  const homeLink = (user && user.role === 'Customer') ? `${prefix}customer-home.html` : (isIndex ? '#' : '../index.html');
 
   let authContent = `
     <a href="${prefix}auth.html" class="btn btn-outline" style="padding: 0.5rem 1rem;">Sign In</a>
@@ -222,20 +240,56 @@ function renderNavbar(targetElementId, currentPath = '') {
           ${user && user.role === 'Worker' ? `<a href="${prefix}jobs.html" style="text-decoration: none; color: var(--text-color); font-weight: 500;">Find Work</a>` : ''}
           ${user && user.role === 'Customer' ? `<a href="${prefix}post-job.html" style="text-decoration: none; color: var(--text-color); font-weight: 500;">Post a Job</a>` : ''}
           ${user ? `<a href="${prefix}my-jobs.html" style="text-decoration: none; color: var(--text-color); font-weight: 500;">Dashboard</a>` : ''}
-          ${user ? `<a href="${prefix}chat.html" style="text-decoration: none; color: var(--text-color); font-weight: 500;">Messages</a>` : ''}
+          ${user ? `<a href="${prefix}chat.html" style="text-decoration: none; color: var(--text-color); font-weight: 500; position: relative;">Messages<span class="cm-dot" id="nav-chat-n" hidden></span></a>` : ''}
+          ${user && user.role === 'Worker' ? `<a href="${prefix}worker-dashboard.html" style="text-decoration: none; color: var(--text-color); font-weight: 500;">Worker Hub</a>` : ''}
           ${user && user.role === 'Worker' ? `<a href="${prefix}edit-profile.html" style="text-decoration: none; color: var(--text-color); font-weight: 500;">My Profile</a>` : ''}
-          ${user && user.role === 'Admin' ? `<a href="${prefix}admin.html" style="text-decoration: none; color: var(--primary); font-weight: 600;">Admin</a>` : ''}
+          ${user && user.role === 'Admin' ? `<a href="${prefix}admin-console.html" style="text-decoration: none; color: var(--primary); font-weight: 600;">Admin</a>` : ''}
         </div>
         
         <div class="flex items-center gap-4">
+          ${user ? '<div id="nav-bell"></div>' : ''}
           ${authContent}
         </div>
       </div>
     </nav>
   `;
+
+  // Live notification bell + unread-message badge for signed-in users (loaded on demand so every page gets it).
+  if (user) {
+    const mount = () => {
+      const N = window.LocalHireNotify;
+      const slot = document.getElementById('nav-bell');
+      if (!N || !slot) return;
+      N.mountBell(slot);
+      const dot = document.getElementById('nav-chat-n');
+      const paint = () => { if (dot) { dot.hidden = !N.state.chatUnread; dot.textContent = N.state.chatUnread > 9 ? '9+' : String(N.state.chatUnread); } };
+      N.on('chatUnread', paint); paint();
+    };
+    if (window.LocalHireNotify) mount();
+    else {
+      if (!document.querySelector('link[href$="comm.css"]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/css/comm.css'; document.head.appendChild(l); }
+      const sc = document.createElement('script'); sc.src = '/js/notifications.js'; sc.onload = mount; document.head.appendChild(sc);
+    }
+  }
 }
 
 window.handleLogout = function () {
+  // Revoke the session on the server (fire-and-forget; keepalive lets it finish during navigation).
+  // The token is read before local state is cleared below.
+  try {
+    const store = window.sessionStorage || (typeof sessionStorage !== 'undefined' ? sessionStorage : null);
+    const token = store ? store.getItem('localHire_token') : null;
+    if (token && typeof fetch === 'function') {
+      fetch(`${window.location.origin}/api/auth/logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        keepalive: true
+      }).catch(() => {});
+    }
+  } catch (e) {
+    // Logging out locally must never depend on the network call.
+  }
+
   if (window.localHireApp && typeof window.localHireApp.logoutUser === 'function') {
     window.localHireApp.logoutUser();
   }

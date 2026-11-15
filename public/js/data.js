@@ -4,111 +4,6 @@
 
 const DEMO_AUTH_ENABLED = false;
 
-const mockWorkers = [
-  {
-    id: 'w1',
-    name: 'Sarah Jenkins',
-    category: 'Tutor',
-    subCategory: 'Mathematics & Science',
-    experience: '5 years',
-    rating: 4.9,
-    reviewsCount: 124,
-    hourlyRate: 500,
-    location: 'Tilakwadi (1.2 km)',
-    lat: 15.8368, // Belagavi coordinates
-    lng: 74.5057,
-    availability: 'Available Today',
-    avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=SarahJ',
-    skills: ['Calculus', 'Physics', 'Exam Prep'],
-    bio: 'Experienced high-school physics and math tutor. I make complex subjects easy to understand with engaging visual examples.',
-  },
-  {
-    id: 'w2',
-    name: 'Marcus Chen',
-    category: 'Electrician',
-    subCategory: 'Residential & Commercial',
-    experience: '8 years',
-    rating: 4.8,
-    reviewsCount: 89,
-    hourlyRate: 400,
-    location: 'Camp Area (3.5 km)',
-    lat: 15.8569,
-    lng: 74.5165,
-    availability: 'Available Tomorrow',
-    avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Marcus',
-    skills: ['Wiring', 'Panel Upgrades', 'Lighting'],
-    bio: 'Licensed electrician ready to help with any residential or light commercial electrical needs. Quick response times.',
-  },
-  {
-    id: 'w3',
-    name: 'Elena Rodriguez',
-    category: 'Cleaner',
-    subCategory: 'Deep Cleaning',
-    experience: '3 years',
-    rating: 4.7,
-    reviewsCount: 210,
-    hourlyRate: 300,
-    location: 'Sadashiv Nagar (5.0 km)',
-    lat: 15.8732,
-    lng: 74.5204,
-    availability: 'Available Next Week',
-    avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Elena1',
-    skills: ['Move-in/out', 'Organization', 'Eco-friendly'],
-    bio: 'Detail-oriented cleaner using 100% eco-friendly products. Let me make your home sparkle so you can relax.',
-  },
-  {
-    id: 'w4',
-    name: 'James Wilson',
-    category: 'Plumber',
-    subCategory: 'Emergency Repairs',
-    experience: '12 years',
-    rating: 4.9,
-    reviewsCount: 342,
-    hourlyRate: 500,
-    location: 'Shahapur (2.1 km)',
-    lat: 15.8407,
-    lng: 74.5215,
-    availability: 'Available Now',
-    avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=James',
-    skills: ['Pipe Repair', 'Water Heaters', 'Clogs'],
-    bio: 'Master plumber with over a decade of experience. Specializing in resolving emergency leaks and installations efficiently.',
-  },
-  {
-    id: 'w5',
-    name: 'Maya Patel',
-    category: 'Driver',
-    subCategory: 'Personal & Deliveries',
-    experience: '4 years',
-    rating: 4.6,
-    reviewsCount: 76,
-    hourlyRate: 250,
-    location: 'Udyambag (0.8 km)',
-    lat: 15.8115,
-    lng: 74.4980,
-    availability: 'Available Today',
-    avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Maya',
-    skills: ['Airport Runs', 'Errands', 'Safe Driving'],
-    bio: 'Reliable personal driver with a pristine driving record. Available for local errands or airport transportation.',
-  },
-  {
-    id: 'w6',
-    name: 'David Kim',
-    category: 'Freelancer',
-    subCategory: 'Web Design',
-    experience: '6 years',
-    rating: 5.0,
-    reviewsCount: 45,
-    hourlyRate: 600,
-    location: 'Remote',
-    lat: null, // Remote worker, no specific coord
-    lng: null,
-    availability: 'Available Tomorrow',
-    avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=David',
-    skills: ['UI/UX', 'Figma', 'Webflow'],
-    bio: 'Creative web designer helping local businesses establish strong digital presences with modern, converting websites.',
-  }
-];
-
 const mockJobs = [
   {
     id: 'j1',
@@ -150,29 +45,20 @@ const mockJobs = [
 
 // Helper to initialize local storage if empty
 function initializeStorage() {
+  // No seeded workers or accounts: workers, ratings and reviews only ever come from the server.
   if (!localStorage.getItem('localHire_users')) {
-    // Seed initial mock workers as registered users
-    const initialUsers = mockWorkers.map(w => ({
-      ...w,
-      email: w.name.split(' ')[0].toLowerCase() + '@example.com',
-      password: 'password123',
-      role: 'Worker',
-      favorites: []
-    }));
-    
-    // Add one mock customer
-    initialUsers.push({
-      id: 'c1',
-      name: 'Alice Customer',
-      email: 'alice@example.com',
-      password: 'password123',
-      role: 'Customer',
-      favorites: []
-    });
-
-    localStorage.setItem('localHire_users', JSON.stringify(initialUsers));
+    localStorage.setItem('localHire_users', JSON.stringify([]));
+  } else {
+    // Purge the demo workers/customer that earlier versions seeded into this browser.
+    try {
+      const kept = JSON.parse(localStorage.getItem('localHire_users')).filter((u) => u && u.password !== 'password123');
+      localStorage.setItem('localHire_users', JSON.stringify(kept));
+    } catch (e) {
+      localStorage.setItem('localHire_users', JSON.stringify([]));
+    }
   }
-  
+  localStorage.removeItem('localHire_reviews'); // locally fabricated reviews from the old offline fallback
+
   if (!localStorage.getItem('localHire_jobs')) {
     localStorage.setItem('localHire_jobs', JSON.stringify(mockJobs));
   }

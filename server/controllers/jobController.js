@@ -71,13 +71,22 @@ const ensureCategory = async (categoryName) => {
   return category;
 };
 
-const formatJob = (job) => {
+// Where a job is. Only a coarse, public-safe label is ever produced: a city if an address relation was loaded, never a
+// street, postal code, landmark or coordinates.
+const coarseLocation = (job) => ({ address: (job.address && job.address.city) || 'Local service request' });
+
+// Who may see which customer a job belongs to: the customer who posted it, and administrators. Everyone else (anonymous
+// visitors, other customers, professionals browsing the board) gets NO customer name and NO user id. Professionals learn
+// who they are working for through a booking, which is the point where a legitimate relationship exists.
+const canSeePoster = (job, viewer) => Boolean(viewer) && (viewer.role === 'Admin' || String(viewer.id) === String(job.customerId));
+
+const formatJob = (job, viewer = null) => {
   const minBudget = job.budgetMin != null ? Number(job.budgetMin) : null;
   const maxBudget = job.budgetMax != null ? Number(job.budgetMax) : null;
   const budgetText = minBudget !== null
     ? (maxBudget !== null && maxBudget !== minBudget ? `₹${minBudget} - ₹${maxBudget}` : `₹${minBudget}`)
     : (job.budget ? String(job.budget) : 'Flexible');
-  const locationValue = job.address || job.location || { address: 'Local service request' };
+  const poster = canSeePoster(job, viewer);
 
   return {
     id: job.id,
@@ -88,13 +97,17 @@ const formatJob = (job) => {
     budget: budgetText,
     urgency: normalizeUrgency(job.urgency),
     status: normalizeStatus(job.status),
-    customerName: job.customer?.name || 'Anonymous',
-    customerId: job.customer?.id || null,
-    location: locationValue,
+    location: coarseLocation(job),
+    isMine: Boolean(viewer) && String(viewer.id) === String(job.customerId),
+    ...(poster ? { customerName: job.customer?.name || 'Anonymous', customerId: job.customerId || null } : {}),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
   };
 };
+
+// Loads only what the board needs. The customer's name is fetched solely so the poster/admin view can show it; it is
+// removed by formatJob for everyone else. No email, phone, address or password hash is ever loaded.
+const JOB_INCLUDE = { customer: { select: { id: true, name: true } }, category: true };
 
 // @desc    Get all jobs with optional filters
 // @route   GET /api/jobs
@@ -103,7 +116,8 @@ exports.getJobs = async (req, res) => {
   try {
     const { q, category, status } = req.query;
 
-    const where = {};
+    // Jobs an administrator has flagged for review are not shown publicly.
+    const where = { isFlagged: false };
 
     if (category) {
       where.category = {
@@ -128,14 +142,11 @@ exports.getJobs = async (req, res) => {
 
     const jobs = await prisma.jobPost.findMany({
       where,
-      include: {
-        customer: true,
-        category: true
-      },
+      include: JOB_INCLUDE,
       orderBy: { createdAt: 'desc' }
     });
 
-    const formatted = jobs.map(formatJob);
+    const formatted = jobs.map((j) => formatJob(j, req.user));
     res.json({ success: true, count: formatted.length, jobs: formatted });
   } catch (error) {
     console.error('[Job Controller] getJobs error:', error);
@@ -150,19 +161,16 @@ exports.getJobById = async (req, res) => {
   try {
     const job = await prisma.jobPost.findUnique({
       where: { id: req.params.id },
-      include: {
-        customer: true,
-        category: true
-      }
+      include: JOB_INCLUDE
     });
 
-    if (!job) {
+    if (!job || job.isFlagged) {
       return res.status(404).json({ success: false, message: 'Job post not found' });
     }
 
     res.json({
       success: true,
-      job: formatJob(job)
+      job: formatJob(job, req.user)
     });
   } catch (error) {
     console.error('[Job Controller] getJobById error:', error);
@@ -199,14 +207,11 @@ exports.createJob = async (req, res) => {
         scheduledSlot: null,
         addressId: null
       },
-      include: {
-        customer: true,
-        category: true
-      }
+      include: JOB_INCLUDE
     });
 
     const jobPayload = {
-      ...formatJob(job),
+      ...formatJob(job, req.user),
       customerName: req.user.name,
       customerId: req.user.id,
       category: categoryRecord.name,
@@ -249,16 +254,13 @@ exports.updateJobStatus = async (req, res) => {
       data: {
         status: nextStatus
       },
-      include: {
-        customer: true,
-        category: true
-      }
+      include: JOB_INCLUDE
     });
 
     res.json({
       success: true,
       job: {
-        ...formatJob(job),
+        ...formatJob(job, req.user),
         assignedWorkerId: assignedWorkerId || null
       }
     });

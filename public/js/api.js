@@ -61,6 +61,16 @@ window.localHireAPI = {
     return false;
   },
 
+  // Auth: store a verified session (token + user) after login / verification / Google sign-in
+  storeSession: (token, user) => {
+    clearAuthState();
+    const sessionStore = getSessionStorage();
+    if (sessionStore && token && user) {
+      sessionStore.setItem('localHire_session', JSON.stringify(user));
+      sessionStore.setItem('localHire_token', token);
+    }
+  },
+
   // Auth: Login
   login: async (email, password) => {
     try {
@@ -70,18 +80,12 @@ window.localHireAPI = {
         body: JSON.stringify({ email, password })
       });
       const data = await res.json();
-      if (res.ok && data.success) {
-        clearAuthState();
-        if (window.sessionStorage) {
-          window.sessionStorage.setItem('localHire_session', JSON.stringify(data.user));
-        }
-        if (data.token) {
-          window.sessionStorage.setItem('localHire_token', data.token);
-        }
+      if (res.ok && data.success && data.token) {
+        window.localHireAPI.storeSession(data.token, data.user);
         return { success: true, user: data.user };
       }
       clearAuthState();
-      return { success: false, message: data.message || 'Invalid credentials' };
+      return { success: false, message: data.message || 'Invalid credentials', code: data.code, email: data.email };
     } catch (err) {
       console.warn('[API Client] Backend unavailable. No mock authentication is created for failed login attempts.');
       clearAuthState();
@@ -89,7 +93,7 @@ window.localHireAPI = {
     }
   },
 
-  // Auth: Register
+  // Auth: Register. Succeeds without a session: the user must verify their email first.
   register: async (userData) => {
     try {
       const res = await fetch(`${API_BASE_URL}/auth/register`, {
@@ -98,24 +102,70 @@ window.localHireAPI = {
         body: JSON.stringify(userData)
       });
       const data = await res.json();
-      if (res.ok && data.success) {
-        clearAuthState();
-        if (window.sessionStorage) {
-          window.sessionStorage.setItem('localHire_session', JSON.stringify(data.user));
-        }
-        if (data.token) {
-          window.sessionStorage.setItem('localHire_token', data.token);
-        }
-        return { success: true, user: data.user };
-      }
       clearAuthState();
-      return { success: false, message: data.message || 'Registration failed' };
+      if (res.ok && data.success) {
+        return { success: true, requiresEmailVerification: Boolean(data.requiresEmailVerification), email: data.email, message: data.message };
+      }
+      return { success: false, message: data.message || 'Registration failed', code: data.code };
     } catch (err) {
       console.warn('[API Client] Backend unavailable. Registration did not create a mock authenticated session.');
       clearAuthState();
       return { success: false, message: 'Unable to reach the LocalHire server.' };
     }
   },
+
+  // Auth: shared POST helper for the public email/password-recovery endpoints
+  _authPost: async (path, body) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      return { ...data, success: Boolean(res.ok && data.success) };
+    } catch (err) {
+      return { success: false, message: 'Unable to reach the LocalHire server.' };
+    }
+  },
+
+  // Auth: complete email verification using the token from the emailed link; signs the user in
+  verifyEmail: async (accessToken) => {
+    const data = await window.localHireAPI._authPost('verify-email', { accessToken });
+    if (data.success && data.token) {
+      window.localHireAPI.storeSession(data.token, data.user);
+      return { success: true, user: data.user };
+    }
+    return { success: false, message: data.message || 'Verification failed', code: data.code };
+  },
+
+  resendVerification: (email) => window.localHireAPI._authPost('resend-verification', { email }),
+
+  forgotPassword: (email) => window.localHireAPI._authPost('forgot-password', { email }),
+
+  resetPassword: (accessToken, password) => window.localHireAPI._authPost('reset-password', { accessToken, password }),
+
+  // Auth: finish "Continue with Google" with the app token the server placed in the URL fragment
+  completeOAuthLogin: async (token) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        window.localHireAPI.storeSession(token, data.user);
+        return { success: true, user: data.user };
+      }
+      clearAuthState();
+      return { success: false, message: data.message || 'Google sign-in could not be completed.' };
+    } catch (err) {
+      clearAuthState();
+      return { success: false, message: 'Unable to reach the LocalHire server.' };
+    }
+  },
+
+  // Auth: URL that starts the Google flow (a full-page navigation handled by the backend)
+  googleLoginUrl: (role) => `${API_BASE_URL}/auth/google${role ? `?role=${encodeURIComponent(role)}` : ''}`,
 
   // Auth: Get Current User Profile
   getMe: async () => {
@@ -346,158 +396,7 @@ window.localHireAPI = {
     }
   },
 
-  tracking: {
-    sockets: new Map(),
-    watchIds: new Map(),
-
-    getSocket: function () {
-      if (typeof window === 'undefined' || !window.io) {
-        return null;
-      }
-
-      const token = getStoredToken();
-      const socketOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : undefined;
-      return window.io(socketOrigin, {
-        auth: { token },
-        transports: ['websocket']
-      });
-    },
-
-    connect: function (bookingId, handlers = {}) {
-      if (!window.io) return null;
-
-      if (!this.sockets.has(bookingId)) {
-        const socket = this.getSocket();
-        if (!socket) return null;
-
-        socket.on('connect', () => {
-          if (handlers.onConnect) handlers.onConnect(socket);
-        });
-
-        socket.on('tracking:state', (payload) => {
-          if (handlers.onState) handlers.onState(payload);
-        });
-
-        socket.on('tracking:location', (payload) => {
-          if (handlers.onLocation) handlers.onLocation(payload);
-        });
-
-        socket.on('worker:location:changed', (payload) => {
-          if (handlers.onLocation) handlers.onLocation(payload);
-        });
-
-        socket.on('booking:status:changed', (payload) => {
-          if (handlers.onStatusChanged) handlers.onStatusChanged(payload);
-        });
-
-        socket.on('tracking:stopped', (payload) => {
-          if (handlers.onStopped) handlers.onStopped(payload);
-        });
-
-        socket.on('tracking:error', (payload) => {
-          if (handlers.onError) handlers.onError(payload);
-        });
-
-        this.sockets.set(bookingId, socket);
-      }
-
-      return this.sockets.get(bookingId);
-    },
-
-    joinBooking: function (bookingId, handlers = {}) {
-      const socket = this.connect(bookingId, handlers);
-      if (!socket) return null;
-      socket.emit('booking:join', { bookingId });
-      return socket;
-    },
-
-    leaveBooking: function (bookingId, handlers = {}) {
-      const socket = this.connect(bookingId, handlers);
-      if (!socket) return null;
-      socket.emit('booking:leave', { bookingId });
-      return socket;
-    },
-
-    subscribe: function (bookingId, handlers = {}) {
-      const socket = this.connect(bookingId, handlers);
-      if (!socket) return null;
-      socket.emit('booking:join', { bookingId });
-      return socket;
-    },
-
-    start: function (bookingId, handlers = {}) {
-      const socket = this.connect(bookingId, handlers);
-      if (!socket) return null;
-      socket.emit('booking:join', { bookingId });
-      return socket;
-    },
-
-    stop: function (bookingId, handlers = {}) {
-      const socket = this.connect(bookingId, handlers);
-      if (!socket) return null;
-      socket.emit('booking:leave', { bookingId });
-      return socket;
-    },
-
-    updateLocation: function (bookingId, latitude, longitude, accuracy = null) {
-      const socket = this.sockets.get(bookingId);
-      if (!socket) return false;
-      socket.emit('worker:location:update', {
-        bookingId,
-        latitude,
-        longitude,
-        accuracy,
-        timestamp: new Date().toISOString()
-      });
-      return true;
-    },
-
-    watchBrowserLocation: function (bookingId, handlers = {}) {
-      if (!navigator.geolocation) {
-        if (handlers.onError) handlers.onError({ bookingId, message: 'Geolocation is not supported by this browser.' });
-        return null;
-      }
-
-      if (this.watchIds.has(bookingId)) {
-        const previousWatch = this.watchIds.get(bookingId);
-        if (previousWatch) navigator.geolocation.clearWatch(previousWatch);
-      }
-
-      const watchId = navigator.geolocation.watchPosition((position) => {
-        const latitude = position.coords.latitude;
-        const longitude = position.coords.longitude;
-        const accuracy = position.coords.accuracy;
-        const socket = this.sockets.get(bookingId);
-        if (socket) {
-          socket.emit('tracking:update', {
-            bookingId,
-            latitude,
-            longitude,
-            accuracy,
-            timestamp: new Date().toISOString()
-          });
-        }
-        if (handlers.onLocation) handlers.onLocation({ bookingId, latitude, longitude, accuracy });
-      }, (error) => {
-        if (handlers.onError) handlers.onError({ bookingId, message: error.message || 'Location access was denied.' });
-      }, {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 15000
-      });
-
-      this.watchIds.set(bookingId, watchId);
-      return watchId;
-    },
-
-    stopBrowserWatch: function (bookingId) {
-      const watchId = this.watchIds.get(bookingId);
-      if (watchId !== undefined && watchId !== null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchId);
-      }
-      this.watchIds.delete(bookingId);
-    }
-  },
+  // Journey tracking moved to js/tracking.js (booking-scoped, participant-checked, honest about staleness).
 
   // Workers / Search (Restricted to Customer / Hire Worker accounts)
   getWorkers: async (queryFilters = {}) => {
@@ -512,41 +411,13 @@ window.localHireAPI = {
       }
       if (res.ok) {
         const data = await res.json();
-        if (data.workers && data.workers.length > 0 && typeof localStorage !== 'undefined') {
-          try {
-            localStorage.setItem('localHire_users', JSON.stringify(data.workers));
-          } catch (e) {}
-        }
-        return data.workers;
+        return data.workers || [];
       }
     } catch (err) {
       console.warn('[API Client] Server offline, checking permissions for local workers');
     }
-    if (queryFilters.lat !== undefined || queryFilters.lng !== undefined) {
-      return [];
-    }
-    // Fallback: strictly forbid Worker accounts from receiving worker search results
-    const currentUser = window.localHireApp ? window.localHireApp.getCurrentUser() : null;
-    if (currentUser && currentUser.role === 'Worker') {
-      return [];
-    }
-    let workers = window.localHireApp.getWorkers();
-    if (queryFilters.q) {
-      const q = queryFilters.q.toLowerCase();
-      workers = workers.filter(w =>
-        w.name.toLowerCase().includes(q) ||
-        w.category.toLowerCase().includes(q) ||
-        (w.skills && w.skills.some(s => s.toLowerCase().includes(q))) ||
-        (w.bio && w.bio.toLowerCase().includes(q))
-      );
-    }
-    if (queryFilters.category) {
-      workers = workers.filter(w => w.category === queryFilters.category);
-    }
-    if (queryFilters.maxPrice) {
-      workers = workers.filter(w => w.hourlyRate <= parseFloat(queryFilters.maxPrice));
-    }
-    return workers;
+    // The server is the only source of discoverable workers (it enforces verification). No local fallback.
+    return [];
   },
 
   getWorkerById: async (id) => {
@@ -559,16 +430,18 @@ window.localHireAPI = {
         return data.worker;
       }
     } catch (err) {
-      console.warn('[API Client] Server offline, using local worker lookup');
+      console.warn('[API Client] Could not load the worker profile from the server.');
     }
-    return window.localHireApp.getWorkerById(id);
+    return null;
   },
 
   // Jobs
   getJobs: async (queryFilters = {}) => {
     try {
       const queryStr = new URLSearchParams(queryFilters).toString();
-      const res = await fetch(`${API_BASE_URL}/jobs?${queryStr}`);
+      // The token (when signed in) lets the server mark the caller's own jobs. Everyone else gets jobs without poster identity.
+      const jobsToken = getStoredToken();
+      const res = await fetch(`${API_BASE_URL}/jobs?${queryStr}`, jobsToken ? { headers: { Authorization: `Bearer ${jobsToken}` } } : undefined);
       if (res.ok) {
         const data = await res.json();
         return data.jobs;
@@ -712,16 +585,16 @@ window.localHireAPI = {
     }
   },
 
-  updateBookingStatus: async (bookingId, status, notes = '') => {
+  updateBookingStatus: async (bookingId, status, notes = '', extra = {}) => {
     try {
       const res = await fetch(`${API_BASE_URL}/bookings/${bookingId}/status`, {
         method: 'PUT',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ status, notes })
+        body: JSON.stringify({ ...extra, status, notes })
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        return { success: true, booking: data.booking, message: data.message };
+        return { success: true, booking: data.booking, message: data.message, refund: data.refund };
       }
       return { success: false, message: data.message || 'Status update failed' };
     } catch (err) {
@@ -792,34 +665,19 @@ window.localHireAPI = {
     return currentUser ? window.localHireApp.getApplicationsForWorker(currentUser.id) : [];
   },
 
+  // The quote creates a price-confirmed booking on the server; there is no offline/local fallback for money flows.
   acceptQuote: async (applicationId) => {
     try {
       const res = await fetch(`${API_BASE_URL}/applications/${applicationId}/accept`, {
         method: 'PUT',
         headers: getAuthHeaders()
       });
-      if (res.ok) {
-        const data = await res.json();
-        return { success: true, message: data.message };
-      }
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) return { success: true, message: data.message, bookingId: data.bookingId || null };
+      return { success: false, message: data.message || 'Could not accept this quote.' };
     } catch (err) {
-      console.warn('[API Client] Server offline, accepting quote locally');
+      return { success: false, message: 'Could not reach LocalHire. Please try again.' };
     }
-    const apps = window.localHireApp.getApplications();
-    const app = apps.find(a => a.id === applicationId);
-    if (app) {
-      app.status = 'Accepted';
-      localStorage.setItem('localHire_applications', JSON.stringify(apps));
-
-      const jobs = window.localHireApp.getJobs();
-      const job = jobs.find(j => j.id === app.jobId);
-      if (job) {
-        job.status = 'In Progress';
-        job.assignedWorker = app.workerId;
-        localStorage.setItem('localHire_jobs', JSON.stringify(jobs));
-      }
-    }
-    return { success: true, message: 'Quote accepted locally' };
   },
 
   // Chat / Messages
@@ -906,50 +764,96 @@ window.localHireAPI = {
     }
   },
 
-  // Reviews
-  createReview: async (jobId, workerId, rating, comment) => {
+  // Reviews: only ever real, server-stored reviews. There is no offline/local stand-in.
+  // A review belongs to one completed booking and can be written once, by the customer who made it.
+  createReview: async (bookingId, rating, comment) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/reviews`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ jobId, workerId, rating, comment })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return { success: true, review: data.review, updatedRating: data.updatedRating };
-      }
+      const data = await window.localHireAPI._json('/reviews', 'POST', { bookingId, rating, comment });
+      return { success: true, review: data.review, summary: data.summary, updatedRating: data.updatedRating };
     } catch (err) {
-      console.warn('[API Client] Server offline, adding review locally');
+      if (err.status) return { success: false, status: err.status, code: err.data && err.data.code, message: err.message };
+      console.warn('[API Client] Could not reach the server to save the review:', err);
+      return { success: false, message: 'Unable to reach the LocalHire server. Your review was not saved.' };
     }
-    const reviews = JSON.parse(localStorage.getItem('localHire_reviews') || '[]');
-    const currentUser = window.localHireApp.getCurrentUser();
-    const revObj = {
-      id: 'r_' + Date.now(),
-      job: jobId,
-      worker: workerId,
-      customer: currentUser ? { name: currentUser.name, avatarUrl: currentUser.avatarUrl } : { name: 'Customer' },
-      rating: parseFloat(rating),
-      comment,
-      createdAt: new Date().toISOString()
-    };
-    reviews.unshift(revObj);
-    localStorage.setItem('localHire_reviews', JSON.stringify(reviews));
-    return { success: true, review: revObj };
   },
 
-  getWorkerReviews: async (workerId) => {
+  getWorkerReviews: async (workerId, params = {}) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/reviews/worker/${workerId}`);
-      if (res.ok) {
-        const data = await res.json();
-        return data.reviews;
-      }
+      const q = new URLSearchParams(params).toString();
+      const res = await fetch(`${API_BASE_URL}/reviews/worker/${encodeURIComponent(workerId)}${q ? `?${q}` : ''}`);
+      if (res.ok) return await res.json();
     } catch (err) {
-      console.warn('[API Client] Server offline, loading local reviews');
+      console.warn('[API Client] Could not load reviews:', err);
     }
-    const reviews = JSON.parse(localStorage.getItem('localHire_reviews') || '[]');
-    return reviews.filter(r => r.worker === workerId);
+    return { reviews: [], count: 0, summary: { count: 0, average: null, distribution: {} } };
   },
+
+  getReceivedReviews: (params = {}) => window.localHireAPI._json(`/reviews/received?${new URLSearchParams(params).toString()}`),
+  reportReview: (reviewId, reason, details) => window.localHireAPI._json(`/reviews/${encodeURIComponent(reviewId)}/report`, 'POST', { reason, details }),
+
+  // ── Categories (database-driven; one source for every dropdown/filter) ─────
+  getCategories: async () => {
+    if (window.__lhCategoriesCache) return window.__lhCategoriesCache;
+    const res = await fetch(`${API_BASE_URL}/categories`);
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.message || 'Could not load categories');
+    window.__lhCategoriesCache = data.categories;
+    return data.categories;
+  },
+
+  // ── Worker onboarding, documents & dashboard ───────────────────────────────
+  _json: async (path, method = 'GET', body) => {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: getAuthHeaders(),
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      const err = new Error(data.message || `Request failed (${res.status})`);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
+  getWorkerStatus: () => window.localHireAPI._json('/worker/status'),
+  getWorkerOnboarding: async () => (await window.localHireAPI._json('/worker/onboarding')).onboarding,
+  saveWorkerOnboardingStep: (step, data, complete) => window.localHireAPI._json(`/worker/onboarding/step/${step}`, 'PUT', { data, complete: Boolean(complete) }),
+  submitWorkerOnboarding: (declaration) => window.localHireAPI._json('/worker/onboarding/submit', 'POST', { declaration: Boolean(declaration) }),
+  deleteWorkerDocument: (id) => window.localHireAPI._json(`/worker/onboarding/documents/${encodeURIComponent(id)}`, 'DELETE'),
+  getWorkerDashboard: () => window.localHireAPI._json('/worker/dashboard'),
+
+  uploadWorkerDocument: async (type, file) => {
+    const token = getStoredToken();
+    const form = new FormData();
+    form.append('type', type);
+    form.append('file', file);
+    const res = await fetch(`${API_BASE_URL}/worker/onboarding/documents`, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: form
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.message || 'Upload failed');
+    return data.document;
+  },
+
+  // ── Admin: worker verification ─────────────────────────────────────────────
+  getWorkerVerifications: async (params = {}) => {
+    const clean = {};
+    Object.keys(params).forEach((k) => { if (params[k] !== undefined && params[k] !== null && params[k] !== '') clean[k] = params[k]; });
+    const q = new URLSearchParams(clean).toString();
+    return window.localHireAPI._json(`/admin/worker-verifications${q ? '?' + q : ''}`);
+  },
+  getWorkerVerification: async (userId) => (await window.localHireAPI._json(`/admin/worker-verifications/${encodeURIComponent(userId)}`)).submission,
+  getWorkerDocumentUrl: (userId, docId) => window.localHireAPI._json(`/admin/worker-verifications/${encodeURIComponent(userId)}/documents/${encodeURIComponent(docId)}/url`),
+  reviewWorkerDocument: (userId, docId, status, reason) => window.localHireAPI._json(`/admin/worker-verifications/${encodeURIComponent(userId)}/documents/${encodeURIComponent(docId)}`, 'PATCH', { status, reason }),
+  startWorkerReview: (userId) => window.localHireAPI._json(`/admin/worker-verifications/${encodeURIComponent(userId)}/start-review`, 'POST', {}),
+  approveWorker: (userId, notes) => window.localHireAPI._json(`/admin/worker-verifications/${encodeURIComponent(userId)}/approve`, 'POST', { notes }),
+  rejectWorker: (userId, reason) => window.localHireAPI._json(`/admin/worker-verifications/${encodeURIComponent(userId)}/reject`, 'POST', { reason }),
+  requestWorkerResubmission: (userId, reason, documentIds) => window.localHireAPI._json(`/admin/worker-verifications/${encodeURIComponent(userId)}/request-resubmission`, 'POST', { reason, documentIds }),
 
   // Admin Portal API
   getAdminMetrics: async () => {
@@ -1050,212 +954,30 @@ window.localHireAPI = {
     }
     throw new Error(data.message || 'Failed to delete job');
   },
-
-  // Escrow & Milestone Payment API Services
-  escrow: {
-    getStatus: async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/escrow/status`);
-        if (res.ok) {
-          return await res.json();
-        }
-      } catch (err) {
-        console.warn('[API Client] Server offline for getStatus');
-      }
-      return { success: false, mode: 'UNAVAILABLE' };
-    },
-
-    fundEscrow: async (jobIdOrBookingId, workerId, amount, paymentMethod, isBooking = false) => {
-      try {
-        const payload = isBooking
-          ? { bookingId: jobIdOrBookingId, workerId, amount, paymentMethod }
-          : { jobId: jobIdOrBookingId, workerId, amount, paymentMethod };
-        const res = await fetch(`${API_BASE_URL}/escrow/fund`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => null);
-        if (res.ok && data) {
-          return data;
-        }
-        return { success: false, message: data?.message || 'Funding escrow failed' };
-      } catch (err) {
-        console.warn('[API Client] Server offline for fundEscrow');
-      }
-      return { success: false, message: 'Unable to reach the LocalHire escrow server.' };
-    },
-
-    releaseEscrow: async (jobIdOrBookingId, isBooking = false, paymentMethod = 'UPI') => {
-      try {
-        const payload = isBooking
-          ? { bookingId: jobIdOrBookingId, paymentMethod }
-          : { jobId: jobIdOrBookingId, paymentMethod };
-        const res = await fetch(`${API_BASE_URL}/escrow/release`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => null);
-        if (res.ok && data) {
-          return data;
-        }
-        return {
-          success: false,
-          message: data?.message || 'Escrow release failed'
-        };
-      } catch (err) {
-        console.warn('[API Client] Server offline for releaseEscrow');
-      }
-      return { success: false, message: 'Unable to reach the LocalHire escrow server.' };
-    },
-
-    disputeEscrow: async (jobIdOrBookingId, reason, isBooking = false) => {
-      try {
-        const payload = isBooking ? { bookingId: jobIdOrBookingId, reason } : { jobId: jobIdOrBookingId, reason };
-        const res = await fetch(`${API_BASE_URL}/escrow/dispute`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => null);
-        if (res.ok && data) {
-          return data;
-        }
-        return {
-          success: false,
-          message: data?.message || 'Escrow dispute failed'
-        };
-      } catch (err) {
-        console.warn('[API Client] Server offline for disputeEscrow');
-      }
-      return { success: false, message: 'Unable to reach the LocalHire escrow server.' };
-    },
-
-    refundEscrow: async (jobIdOrBookingId, reason, isBooking = false) => {
-      try {
-        const payload = isBooking ? { bookingId: jobIdOrBookingId, reason } : { jobId: jobIdOrBookingId, reason };
-        const res = await fetch(`${API_BASE_URL}/escrow/refund`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => null);
-        if (res.ok && data) {
-          return data;
-        }
-        return {
-          success: false,
-          message: data?.message || 'Escrow refund failed'
-        };
-      } catch (err) {
-        console.warn('[API Client] Server offline for refundEscrow');
-      }
-      return { success: false, message: 'Unable to reach the LocalHire escrow server.' };
-    },
-
-    getJobEscrow: async (jobId) => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/escrow/job/${jobId}`, {
-          headers: getAuthHeaders()
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return data.escrow;
-        }
-      } catch (err) {
-        console.warn('[API Client] Server offline for getJobEscrow');
-      }
-      return null;
-    },
-
-    getBookingEscrow: async (bookingId) => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/escrow/booking/${bookingId}`, {
-          headers: getAuthHeaders()
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return data.escrow;
-        }
-      } catch (err) {
-        console.warn('[API Client] Server offline for getBookingEscrow');
-      }
-      return null;
-    },
-
-    getUserLedger: async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/escrow/ledger`, {
-          headers: getAuthHeaders()
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return data.transactions;
-        }
-      } catch (err) {
-        console.warn('[API Client] Server offline for getUserLedger');
-      }
-      return [];
-    }
-  },
-
-  razorpay: {
-    getConfig: async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/escrow/razorpay/config`);
-        if (res.ok) {
-          return await res.json();
-        }
-      } catch (err) {
-        console.warn('[API Client] Server offline for razorpay config');
-      }
-      return { success: false, keyId: null };
-    },
-
-    createOrder: async (bookingId) => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/escrow/razorpay/create-order`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({ bookingId })
-        });
-        const data = await res.json().catch(() => null);
-        if (res.ok && data) {
-          return data;
-        }
-        return {
-          success: false,
-          message: data?.message || 'Failed to create Razorpay payment order'
-        };
-      } catch (err) {
-        console.warn('[API Client] Error calling razorpay createOrder:', err);
-      }
-      return { success: false, message: 'Unable to reach the payment server.' };
-    },
-
-    verifyPayment: async (verificationData) => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/escrow/razorpay/verify-payment`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify(verificationData)
-        });
-        const data = await res.json().catch(() => null);
-        if (res.ok && data) {
-          return data;
-        }
-        return {
-          success: false,
-          message: data?.message || 'Payment verification failed'
-        };
-      } catch (err) {
-        console.warn('[API Client] Error calling razorpay verifyPayment:', err);
-      }
-      return { success: false, message: 'Unable to reach the payment verification server.' };
-    }
-  }
 };
 
 // Check backend status on script load
 window.localHireAPI.checkHealth();
+
+// Fills a <select> from the database-driven category list. Existing options are kept as a fallback
+// if the request fails; `keep` options (e.g. "All Categories") stay at the top.
+window.localHireCategories = {
+  fill: async (select, { keepFirst = 1, valueKey = 'name', selected = '' } = {}) => {
+    if (!select) return;
+    try {
+      const categories = await window.localHireAPI.getCategories();
+      const kept = Array.from(select.options).slice(0, keepFirst);
+      select.innerHTML = '';
+      kept.forEach((o) => select.appendChild(o));
+      categories.forEach((c) => {
+        const opt = document.createElement('option');
+        opt.value = c[valueKey];
+        opt.textContent = c.name;
+        select.appendChild(opt);
+      });
+      if (selected) select.value = selected;
+    } catch (e) {
+      console.warn('[Categories] Using the page defaults because the list could not be loaded:', e.message);
+    }
+  }
+};
