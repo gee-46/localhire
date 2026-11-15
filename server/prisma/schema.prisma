@@ -25,6 +25,26 @@ enum VerificationStatus {
   REJECTED
 }
 
+// Worker onboarding / document review lifecycle (null on the onboarding record while it is still a draft)
+enum WorkerVerificationStatus {
+  PENDING
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  RESUBMISSION_REQUIRED
+}
+
+enum WorkerDocumentType {
+  GOVT_ID_PASSPORT
+  GOVT_ID_DRIVING_LICENCE
+  GOVT_ID_VOTER_ID
+  GOVT_ID_PAN
+  GOVT_ID_AADHAAR_MASKED  // masked copy only (last 4 digits visible); full Aadhaar is never requested
+  GOVT_ID_OTHER
+  PROFESSIONAL_CERTIFICATE
+  SKILL_QUALIFICATION
+}
+
 enum PriceType {
   FIXED
   HOURLY
@@ -64,6 +84,63 @@ enum BookingStatus {
   COMPLETED
   CANCELLED
   DISPUTED
+}
+
+// ── Phase 4: payments, refunds, settlements ───────────────────────────────
+// Customer-side money movement only. Booking status is a separate concept and never changes because of these.
+enum PaymentState {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+// Worker-side obligation created when a payment is captured.
+enum SettlementStatus {
+  PENDING_COMPLETION   // customer has paid; the service is not yet confirmed complete
+  ELIGIBLE             // customer confirmed completion; worker is owed the net amount
+  PAYOUT_PROCESSING    // a provider transfer exists but the money has not reached the worker's bank yet
+  PAID                 // provider reports the transfer settled to the worker's bank account
+  FAILED               // provider transfer failed
+  REVERSED             // transfer was reversed (refund)
+  BLOCKED              // dispute or open refund: payout must not proceed
+  CANCELLED            // payment fully refunded / booking cancelled: nothing is owed
+}
+
+enum PaymentTxType {
+  ORDER_CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUND_INITIATED
+  REFUND_PROCESSED
+  REFUND_FAILED
+  DUPLICATE_PAYMENT_REFUNDED
+  COMPLETION_CONFIRMED
+  TRANSFER_CREATED
+  TRANSFER_PROCESSED
+  TRANSFER_FAILED
+  TRANSFER_REVERSED
+  TRANSFER_RELEASED
+  DISPUTE_OPENED
+  MIGRATED_FROM_LEGACY
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum PayoutAccountStatus {
+  NOT_STARTED
+  CREATED
+  NEEDS_CLARIFICATION
+  UNDER_REVIEW
+  ACTIVATED
+  SUSPENDED
 }
 
 enum PaymentStatus {
@@ -109,6 +186,26 @@ enum NotificationType {
   NEW_MESSAGE
   REVIEW_SUBMITTED
   SYSTEM_ALERT
+  BOOKING_REJECTED
+  BOOKING_CANCELLED
+  BOOKING_RESCHEDULED
+  WORKER_ON_THE_WAY
+  WORKER_ARRIVED
+  COMPLETION_REQUESTED
+  REFUND_PROCESSED
+  DISPUTE_UPDATE
+  EARNINGS_UPDATED
+  PAYOUT_UPDATE
+}
+
+// Grouping used by the notification centre filters. Derived from the type on the server.
+enum NotificationCategory {
+  BOOKING
+  PAYMENT
+  MESSAGE
+  DISPUTE
+  EARNINGS
+  SYSTEM
 }
 
 // -------------------------------------------------------------
@@ -118,19 +215,32 @@ enum NotificationType {
 model User {
   id              String             @id @default(uuid())
   email           String             @unique
-  passwordHash    String
+  // Null for accounts whose credentials live only in Supabase Auth (email/password after
+  // migration, or Google sign-in). Legacy bcrypt hashes are kept until the account is linked.
+  passwordHash    String?
   name            String
   phone           String?
   role            UserRole           @default(CUSTOMER)
   avatarUrl       String?
   isActive        Boolean            @default(true)
   isEmailVerified Boolean            @default(false)
+  // Link to the Supabase Auth identity (auth.users.id). Supabase Auth owns email delivery,
+  // email verification, password reset and Google OAuth; this table stays the app's single user table.
+  supabaseAuthId  String?            @unique
+  // Incremented on logout / password reset to invalidate every previously issued app JWT.
+  tokenVersion    Int                @default(0)
+  // Admin suspension (isActive is set to false with it). Kept separately so the reason and time are visible.
+  suspendedAt      DateTime?
+  suspensionReason String?
+  suspendedById    String?
   verificationStatus VerificationStatus @default(UNVERIFIED)
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
   // Profiles and Addresses
   workerProfile   WorkerProfile?
+  workerOnboarding WorkerOnboarding?
+  workerDocuments  WorkerDocument[]
   addresses       CustomerAddress[]
   customerLocation CustomerLocation?
 
@@ -148,10 +258,16 @@ model User {
   // Invoices & Payments
   customerPayments EscrowPayment[]   @relation("CustomerPayments")
   workerPayouts    EscrowPayment[]   @relation("WorkerPayouts")
+  paymentsMade     Payment[]         @relation("PaymentCustomer")
+  paymentsReceived Payment[]         @relation("PaymentWorker")
+  settlements      WorkerSettlement[] @relation("SettlementWorker")
+  payoutAccount    WorkerPayoutAccount?
 
   // Reviews
   reviewsGiven    Review[]           @relation("CustomerReviewsGiven")
   reviewsReceived Review[]           @relation("WorkerReviewsReceived")
+  reviewReports   ReviewReport[]     @relation("ReviewReporter")
+  reviewModerationEvents ReviewModerationEvent[] @relation("ReviewModerator")
 
   // Chat & Messaging
   sentMessages     ChatMessage[]     @relation("SentMessages")
@@ -161,6 +277,7 @@ model User {
 
   // Notifications, Tickets, Audit Logs
   notifications   Notification[]
+  pushSubscriptions PushSubscription[]
   ticketsRaised   SupportTicket[]    @relation("TicketReporter")
   ticketsAssigned SupportTicket[]    @relation("TicketAssignee")
   auditLogs       AuditLog[]
@@ -228,6 +345,7 @@ model ServiceCategory {
 
   services       ServiceItem[]
   workerProfiles WorkerProfile[]
+  extraWorkerProfiles WorkerProfileCategory[]
   jobPosts       JobPost[]
 
   createdAt      DateTime        @default(now())
@@ -286,7 +404,7 @@ model WorkerProfile {
   licenseNumber       String?
 
   // Quality metrics
-  rating              Decimal            @default(5.00) @db.Decimal(3, 2)
+  rating              Decimal            @default(0) @db.Decimal(3, 2)
   reviewsCount        Int                @default(0)
   completedJobsCount  Int                @default(0)
 
@@ -295,8 +413,16 @@ model WorkerProfile {
   serviceAddress      String?
   latitude            Float?
   longitude           Float?
+  city                String?
+  locality            String?
+
+  // Onboarding details
+  languages           String[]           @default([])
+  previousExperience  String?            @db.Text
 
   // Profile Relationships
+  additionalCategories WorkerProfileCategory[]
+  portfolio           WorkerPortfolioItem[]
   locationSharing     WorkerLocation?
   skills              ProfessionalSkill[]
   offeredServices     ProfessionalOfferedService[]
@@ -312,19 +438,121 @@ model WorkerProfile {
   @@index([latitude, longitude])
 }
 
+// Photos of a worker's past work, shown on their public profile. Real uploads only.
+model WorkerPortfolioItem {
+  id              String        @id @default(uuid())
+  workerProfileId String
+  workerProfile   WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  imageUrl        String
+  storagePath     String        @unique
+  caption         String?
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+
+  @@index([workerProfileId, sortOrder])
+}
+
+// Extra service categories a worker offers besides primaryCategoryId
+model WorkerProfileCategory {
+  workerProfileId String
+  workerProfile   WorkerProfile   @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  categoryId      String
+  category        ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdAt       DateTime        @default(now())
+
+  @@id([workerProfileId, categoryId])
+  @@index([categoryId])
+}
+
+// -------------------------------------------------------------
+// WORKER ONBOARDING & DOCUMENT VERIFICATION
+// -------------------------------------------------------------
+
+model WorkerOnboarding {
+  id             String                    @id @default(uuid())
+  userId         String                    @unique
+  user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  currentStep    Int                       @default(1)
+  draft          Json                      @default("{}")   // saved wizard answers until submission
+  status         WorkerVerificationStatus?                  // null = draft, not yet submitted
+  submittedAt    DateTime?
+  reviewedAt     DateTime?
+  reviewedById   String?
+  decisionReason String?                   @db.Text
+  attemptCount   Int                       @default(0)
+
+  documents      WorkerDocument[]
+  events         WorkerVerificationEvent[]
+
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  @@index([status])
+  @@index([submittedAt])
+}
+
+model WorkerDocument {
+  id              String                   @id @default(uuid())
+  userId          String
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  onboardingId    String
+  onboarding      WorkerOnboarding         @relation(fields: [onboardingId], references: [id], onDelete: Cascade)
+
+  type            WorkerDocumentType
+  originalName    String
+  mimeType        String
+  sizeBytes       Int
+  storageBucket   String                   // private bucket; objects are never publicly readable
+  storagePath     String                   @unique
+
+  status          WorkerVerificationStatus @default(PENDING)
+  rejectionReason String?                  @db.Text
+  reviewedById    String?
+  reviewedAt      DateTime?
+  isCurrent       Boolean                  @default(true)  // false once removed/replaced; row + file kept for audit
+
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  @@index([userId, isCurrent])
+  @@index([onboardingId])
+  @@index([status])
+}
+
+model WorkerVerificationEvent {
+  id           String                    @id @default(uuid())
+  onboardingId String
+  onboarding   WorkerOnboarding          @relation(fields: [onboardingId], references: [id], onDelete: Cascade)
+  actorId      String?
+  actorRole    String                    // WORKER | ADMIN
+  action       String                    // SUBMITTED, RESUBMITTED, REVIEW_STARTED, DOCUMENT_VERIFIED, APPROVED, REJECTED, RESUBMISSION_REQUESTED, ...
+  fromStatus   WorkerVerificationStatus?
+  toStatus     WorkerVerificationStatus?
+  reason       String?                   @db.Text
+  documentId   String?
+  createdAt    DateTime                  @default(now())
+
+  @@index([onboardingId, createdAt])
+}
+
 model WorkerLocation {
   workerProfileId       String        @id
   workerProfile         WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
   latitude              Float?
   longitude             Float?
   lastLocationUpdate    DateTime?
+  accuracyMeters        Float?        // reported accuracy of the fix behind latitude/longitude (marketplace availability)
   isAvailable           Boolean       @default(false)
   sharingEnabled        Boolean       @default(false)
   location              Unsupported("geography(Point,4326)")?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
-  @@index([isAvailable, sharingEnabled, lastLocationUpdate])
+  // These two indexes already exist in the database (migration 20261031000000_worker_location_postgis). They are declared
+  // here so Prisma does not treat them as drift and generate a DROP INDEX on the spatial index the discovery query depends on.
+  @@index([isAvailable, sharingEnabled, lastLocationUpdate], map: "WorkerLocation_discovery_idx")
+  @@index([location], type: Gist, map: "WorkerLocation_location_gist_idx")
 }
 
 model ProfessionalSkill {
@@ -483,6 +711,7 @@ model Booking {
   timeSlot           String?              // E.g., "10:00 AM - 01:00 PM"
 
   agreedPrice        Decimal              @db.Decimal(10, 2)
+  problemDescription String?              @db.Text   // what the customer needs done, written at request time
   actualDurationMin  Int?
 
   // Verification PINs for on-site security
@@ -491,11 +720,25 @@ model Booking {
 
   startedAt          DateTime?
   completedAt        DateTime?
+
+  // Journey tracking (Phase 6). journeyStatus is DERIVED from status + these timestamps; it is not stored.
+  journeyStartedAt   DateTime?            // worker explicitly pressed "Start journey" (status DISPATCHED)
+  arrivedAt          DateTime?            // worker confirmed arrival; live sharing ends here
+  // Last known journey position. Only exists while the journey is being tracked: cleared on arrival, service start,
+  // completion, cancellation and dispute. Never returned in booking payloads (only by the participant-checked tracking API).
+  trackLatitude      Float?
+  trackLongitude     Float?
+  trackAccuracy      Float?
+  trackUpdatedAt     DateTime?
   cancelledAt        DateTime?
   cancellationReason String?              @db.Text
 
   // Relational records
-  payment            EscrowPayment?
+  payment            Payment?
+  conversation       Conversation?
+  notifications      Notification[]
+  legacyEscrow       EscrowPayment?       // pre-Phase-4 escrow rows (archive only; never used for balances)
+  priceConfirmedAt   DateTime?            // set when the worker accepts and confirms the service price; payment is only possible after this
   review             Review?
   statusHistory      BookingStatusHistory[]
   disputes           SupportTicket[]
@@ -575,6 +818,156 @@ model EscrowPayment {
   @@index([createdAt])
 }
 
+// ── Phase 4 payment domain ────────────────────────────────────────────────
+
+model Payment {
+  id               String       @id @default(uuid())
+  paymentNumber    String       @unique
+  bookingId        String       @unique
+  booking          Booking      @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  customerId       String
+  customer         User         @relation("PaymentCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  workerId         String
+  worker           User         @relation("PaymentWorker", fields: [workerId], references: [id], onDelete: Restrict)
+
+  // Server-computed breakdown (immutable once the order exists)
+  serviceAmount    Decimal      @db.Decimal(10, 2)
+  platformFee      Decimal      @default(0) @db.Decimal(10, 2)
+  taxAmount        Decimal      @default(0) @db.Decimal(10, 2)
+  totalAmount      Decimal      @db.Decimal(10, 2)
+  currency         String       @default("INR")
+
+  state            PaymentState @default(CREATED)
+  attempts         Int          @default(1)
+  gatewayProvider  String       @default("RAZORPAY")
+  gatewayOrderId   String?      @unique
+  gatewayPaymentId String?      @unique
+  method           String?      // upi | card | netbanking | wallet | emi ...
+  methodDetail     String?      // e.g. "VISA ****1111", "UPI", bank name; never full card/VPA
+
+  amountRefunded   Decimal      @default(0) @db.Decimal(10, 2)
+  // Razorpay's own charge for processing this payment, as reported on the payment entity (rupees). NULL = not reported.
+  gatewayFee       Decimal?     @db.Decimal(10, 2)
+  gatewayFeeTax    Decimal?     @db.Decimal(10, 2)
+  authorizedAt     DateTime?
+  capturedAt       DateTime?
+  failedAt         DateTime?
+  failureCode      String?
+  failureReason    String?
+
+  disputed         Boolean      @default(false)
+  disputeReason    String?      @db.Text
+
+  transactions     PaymentTransaction[]
+  refunds          PaymentRefund[]
+  settlement       WorkerSettlement?
+
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([customerId, createdAt])
+  @@index([workerId])
+  @@index([state])
+}
+
+// Append-only record of every money event (never updated or deleted).
+model PaymentTransaction {
+  id          String        @id @default(uuid())
+  paymentId   String
+  payment     Payment       @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  type        PaymentTxType
+  amount      Decimal?      @db.Decimal(10, 2)
+  gatewayRef  String        @default("")      // razorpay payment / refund / transfer id; "" when none
+  note        String?
+  actorId     String?
+  createdAt   DateTime      @default(now())
+
+  @@unique([paymentId, type, gatewayRef])      // makes recording the same event twice a no-op
+  @@index([paymentId, createdAt])
+}
+
+model PaymentRefund {
+  id              String       @id @default(uuid())
+  paymentId       String
+  payment         Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  amount          Decimal      @db.Decimal(10, 2)
+  status          RefundStatus @default(PENDING)
+  kind            String       // CUSTOMER_CANCELLATION | WORKER_CANCELLATION | ADMIN | DUPLICATE_PAYMENT
+  reason          String?      @db.Text
+  receipt         String       @unique          // idempotency key sent to the gateway
+  gatewayRefundId String?      @unique
+  gatewayPaymentId String?     // payment this refund was issued against (differs from Payment.gatewayPaymentId for duplicates)
+  initiatedById   String?
+  failureReason   String?
+  processedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([paymentId])
+  @@index([status])
+}
+
+model WorkerSettlement {
+  id                 String           @id @default(uuid())
+  paymentId          String           @unique
+  payment            Payment          @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  bookingId          String
+  workerId           String
+  worker             User             @relation("SettlementWorker", fields: [workerId], references: [id], onDelete: Restrict)
+
+  serviceAmount      Decimal          @db.Decimal(10, 2)
+  commissionRate     Decimal          @default(0) @db.Decimal(5, 2)   // percent in force when the payment was captured
+  commission         Decimal          @default(0) @db.Decimal(10, 2)
+  refundAdjustment   Decimal          @default(0) @db.Decimal(10, 2)
+  netAmount          Decimal          @db.Decimal(10, 2)
+
+  status             SettlementStatus @default(PENDING_COMPLETION)
+  payoutRail         String?          // "RAZORPAY_ROUTE" once a provider transfer exists; null = no payout rail used
+  gatewayTransferId  String?          @unique
+  transferStatus     String?          // provider transfer status (created/pending/processed/failed/reversed)
+  settlementStatus   String?          // provider settlement status (pending/on_hold/settled)
+  failureReason      String?
+  attempts           Int              @default(0)
+  eligibleAt         DateTime?
+  paidAt             DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([workerId, status])
+  @@index([bookingId])
+}
+
+// Razorpay Route linked account for a worker (bank details are sent to Razorpay and NOT stored here).
+model WorkerPayoutAccount {
+  id                 String              @id @default(uuid())
+  userId             String              @unique
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gatewayAccountId   String?             @unique
+  gatewayProductId   String?
+  status             PayoutAccountStatus @default(NOT_STARTED)
+  requirements       Json?
+  legalName          String?
+  bankLast4          String?
+  bankVerification   String?             // pending | verified | failed (as reported by the provider)
+  lastError          String?
+  lastSyncedAt       DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+// Every webhook delivery, keyed by Razorpay's event id, so replays are processed at most once.
+model WebhookEvent {
+  id          String    @id @default(uuid())
+  eventId     String    @unique
+  event       String
+  status      String    @default("RECEIVED")   // RECEIVED | PROCESSED | IGNORED | FAILED
+  error       String?
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([event])
+}
+
 // -------------------------------------------------------------
 // REVIEWS & REPUTATION (Verified Booking Required)
 // -------------------------------------------------------------
@@ -597,12 +990,86 @@ model Review {
   comment        String   @db.Text
   isVerified     Boolean  @default(true)
 
+  // Moderation state. PUBLISHED reviews count towards public ratings; HIDDEN ones do not but are never deleted.
+  // "Reported" is not a stored state: it is a PUBLISHED review with at least one OPEN report.
+  status         ReviewStatus @default(PUBLISHED)
+  hiddenAt       DateTime?
+  hiddenReason   String?   @db.Text
+  hiddenById     String?
+
+  reports        ReviewReport[]
+  moderationEvents ReviewModerationEvent[]
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@index([workerId])
   @@index([customerId])
   @@index([rating])
+  @@index([workerId, status])
+  @@index([status, createdAt])
+}
+
+enum ReviewStatus {
+  PUBLISHED
+  HIDDEN
+}
+
+enum ReviewReportReason {
+  ABUSIVE
+  FAKE_OR_FRAUDULENT
+  NOT_MY_CUSTOMER
+  PRIVATE_INFORMATION
+  OTHER
+}
+
+enum ReviewReportStatus {
+  OPEN
+  DISMISSED
+  UPHELD
+}
+
+enum ReviewModerationAction {
+  HIDDEN
+  RESTORED
+  REPORT_DISMISSED
+  REPORT_UPHELD
+}
+
+// A professional's report of an abusive or fraudulent review. One report per professional per review.
+model ReviewReport {
+  id             String             @id @default(uuid())
+  reviewId       String
+  review         Review             @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reporterId     String
+  reporter       User               @relation("ReviewReporter", fields: [reporterId], references: [id], onDelete: Restrict)
+
+  reason         ReviewReportReason
+  details        String?            @db.Text
+  status         ReviewReportStatus @default(OPEN)
+  resolvedAt     DateTime?
+  resolvedById   String?
+  resolutionNote String?            @db.Text
+
+  createdAt      DateTime           @default(now())
+
+  @@unique([reviewId, reporterId])
+  @@index([status, createdAt])
+  @@index([reviewId])
+}
+
+// Append-only moderation history: who hid / restored / resolved reports on a review, when and why.
+model ReviewModerationEvent {
+  id          String                 @id @default(uuid())
+  reviewId    String
+  review      Review                 @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  action      ReviewModerationAction
+  actorId     String?
+  actor       User?                  @relation("ReviewModerator", fields: [actorId], references: [id], onDelete: SetNull)
+  reason      String                 @db.Text
+  createdAt   DateTime               @default(now())
+
+  @@index([reviewId, createdAt])
 }
 
 // -------------------------------------------------------------
@@ -616,13 +1083,17 @@ model Conversation {
   user2Id        String
   user2          User          @relation("ConversationUser2", fields: [user2Id], references: [id], onDelete: Cascade)
 
+  // Every conversation belongs to exactly one booking (null only for pre-existing legacy rows with no booking)
+  bookingId      String?       @unique
+  booking        Booking?      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
   lastMessageAt  DateTime      @default(now())
   messages       ChatMessage[]
 
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  @@unique([user1Id, user2Id])
+  @@index([user1Id, user2Id])
   @@index([user1Id])
   @@index([user2Id])
   @@index([lastMessageAt])
@@ -642,8 +1113,13 @@ model ChatMessage {
   isRead         Boolean       @default(false)
   readAt         DateTime?
 
+  // Supplied by the sender's client; (senderId, clientMessageId) is unique so a retried send can never create a duplicate
+  clientMessageId String?
+
   createdAt      DateTime      @default(now())
 
+  @@unique([senderId, clientMessageId])
+  @@index([conversationId, createdAt])
   @@index([conversationId])
   @@index([senderId, receiverId])
   @@index([createdAt])
@@ -663,11 +1139,34 @@ model Notification {
   type        NotificationType
   linkUrl     String?
   isRead      Boolean          @default(false)
+  readAt      DateTime?
+  category    NotificationCategory @default(SYSTEM)
+  bookingId   String?
+  booking     Booking?         @relation(fields: [bookingId], references: [id], onDelete: SetNull)
 
   createdAt   DateTime         @default(now())
 
   @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([bookingId])
   @@index([createdAt])
+}
+
+// Browser Web Push subscription. One row per browser/device; removed when the push service says it has expired.
+model PushSubscription {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint    String    @unique
+  p256dh      String
+  auth        String
+  userAgent   String?
+  failureCount Int      @default(0)
+  lastSuccessAt DateTime?
+  lastFailureAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
 }
 
 // -------------------------------------------------------------

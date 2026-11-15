@@ -2,6 +2,15 @@
 // Seeds comprehensive home services taxonomy, service items, and fictional test accounts.
 // DO NOT USE REAL PASSWORDS OR PERSONAL INFORMATION HERE.
 
+require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+
+// SAFETY: this script creates fictional accounts with a publicly documented password and a demo review. It must never
+// run against a production database. Refuse outright when the environment says production.
+if (String(process.env.NODE_ENV || '').trim() === 'production') {
+  console.error('[Seed] REFUSING TO RUN: NODE_ENV=production. The demo seed creates fictional accounts with a known password and must never be used on a production database.');
+  process.exit(1);
+}
+
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
@@ -51,8 +60,8 @@ async function main() {
       displayOrder: 4
     },
     {
-      name: 'AC Technician',
-      slug: 'ac-technician',
+      name: 'AC Repair',
+      slug: 'ac-repair',
       description: 'Air conditioner servicing, chemical wash, gas refill, and cooling diagnostic repair.',
       iconUrl: 'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&w=120&q=80',
       displayOrder: 5
@@ -106,8 +115,8 @@ async function main() {
     { categoryId: categoryMap['cleaner'].id, title: 'Deep Kitchen Cleaning', slug: 'deep-kitchen-cleaning', basePrice: 1200.00, priceType: 'FIXED', durationMinutes: 180 },
     { categoryId: categoryMap['cleaner'].id, title: 'Bathroom Sanitation & Tile Scrub', slug: 'bathroom-sanitation', basePrice: 500.00, priceType: 'FIXED', durationMinutes: 90 },
     // AC Technician
-    { categoryId: categoryMap['ac-technician'].id, title: 'AC Filter Cleaning & Deep Service', slug: 'ac-filter-deep-service', basePrice: 599.00, priceType: 'FIXED', durationMinutes: 60 },
-    { categoryId: categoryMap['ac-technician'].id, title: 'AC Gas Refill & Cooling Check', slug: 'ac-gas-refill', basePrice: 1500.00, priceType: 'INSPECTION_PLUS_QUOTE', durationMinutes: 90 }
+    { categoryId: categoryMap['ac-repair'].id, title: 'AC Filter Cleaning & Deep Service', slug: 'ac-filter-deep-service', basePrice: 599.00, priceType: 'FIXED', durationMinutes: 60 },
+    { categoryId: categoryMap['ac-repair'].id, title: 'AC Gas Refill & Cooling Check', slug: 'ac-gas-refill', basePrice: 1500.00, priceType: 'INSPECTION_PLUS_QUOTE', durationMinutes: 90 }
   ];
 
   for (const item of serviceItemsData) {
@@ -206,9 +215,9 @@ async function main() {
           isBackgroundChecked: true,
           isInsured: true,
           licenseNumber: 'ELEC-2021-9988',
-          rating: 4.85,
-          reviewsCount: 42,
-          completedJobsCount: 89,
+          rating: 0,
+          reviewsCount: 0,
+          completedJobsCount: 0,
           serviceRadiusKm: 25,
           serviceAddress: 'Camp Area, Belagavi',
           latitude: 15.8569,
@@ -261,9 +270,9 @@ async function main() {
           isBackgroundChecked: true,
           isInsured: true,
           licenseNumber: 'PLUMB-2018-4432',
-          rating: 4.90,
-          reviewsCount: 78,
-          completedJobsCount: 140,
+          rating: 5.0,
+          reviewsCount: 1,        // matches the single seeded Review below
+          completedJobsCount: 1,  // matches the single seeded completed Booking below
           serviceRadiusKm: 20,
           serviceAddress: 'Shahapur, Belagavi',
           latitude: 15.8407,
@@ -319,26 +328,7 @@ async function main() {
     }
   });
 
-  await prisma.escrowPayment.create({
-    data: {
-      invoiceNumber: 'INV-2026-0001',
-      bookingId: sampleBooking.id,
-      customerId: customerUser.id,
-      workerId: plumberUser.id,
-      subtotalAmount: 550.00,
-      platformFee: 27.50, // 5% platform fee
-      workerPayoutAmount: 522.50,
-      totalAmount: 550.00,
-      currency: 'INR',
-      status: 'RELEASED_TO_WORKER',
-      paymentMethod: 'UPI',
-      gatewayProvider: 'SIMULATED_GATEWAY',
-      gatewayOrderId: 'order_dev_0001',
-      gatewayPaymentId: 'pay_dev_0001',
-      heldAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
-      releasedAt: new Date(Date.now() - 23 * 60 * 60 * 1000)
-    }
-  });
+  // No payment row is seeded: payments only ever exist after a real Razorpay (test-mode) transaction.
 
   await prisma.review.create({
     data: {
